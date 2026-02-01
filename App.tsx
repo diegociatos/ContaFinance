@@ -13,7 +13,7 @@ import CreditCardView from './components/CreditCardView';
 import { 
   AppState, ViewType, Transaction, Entity, Category, Institution, 
   Asset, AssetSnapshot, AssetClass, Indexer, MappingTemplate, 
-  CreditCard, CardTransaction, CategoryMapping, FixedAsset, FixedAssetSnapshot, Liability, InsurancePolicy
+  CreditCard, CardTransaction, CategoryMapping, MerchantRule, FixedAsset, FixedAssetSnapshot, Liability, InsurancePolicy
 } from './types';
 
 const STORAGE_KEY = 'contafinance_enterprise_v1';
@@ -30,6 +30,7 @@ const App: React.FC = () => {
   const [entities, setEntities] = useState<Entity[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [categoryMappings, setCategoryMappings] = useState<CategoryMapping[]>([]);
+  const [merchantRules, setMerchantRules] = useState<MerchantRule[]>([]);
   const [instituicoes, setInstituicoes] = useState<Institution[]>([]);
   const [assets, setAssets] = useState<Asset[]>([]);
   const [assetClasses, setAssetClasses] = useState<AssetClass[]>([]);
@@ -54,6 +55,7 @@ const App: React.FC = () => {
         if (p.entities) setEntities(p.entities);
         if (p.categories) setCategories(p.categories);
         if (p.categoryMappings) setCategoryMappings(p.categoryMappings);
+        if (p.merchantRules) setMerchantRules(p.merchantRules);
         if (p.instituicoes) setInstituicoes(p.instituicoes);
         if (p.transactions) setTransactions(p.transactions);
         if (p.creditCards) setCreditCards(p.creditCards);
@@ -77,7 +79,7 @@ const App: React.FC = () => {
   useEffect(() => {
     if (isLoaded) {
       const data = { 
-        entities, categories, categoryMappings, instituicoes, transactions, 
+        entities, categories, categoryMappings, merchantRules, instituicoes, transactions, 
         creditCards, cardTransactions, assets, assetClasses, indexers, 
         assetSnapshots, fixedAssets, fixedAssetSnapshots, liabilities, 
         insurancePolicies, mappingTemplates 
@@ -85,7 +87,7 @@ const App: React.FC = () => {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
     }
   }, [
-    entities, categories, categoryMappings, instituicoes, transactions, 
+    entities, categories, categoryMappings, merchantRules, instituicoes, transactions, 
     creditCards, cardTransactions, assets, assetClasses, indexers, 
     assetSnapshots, fixedAssets, fixedAssetSnapshots, liabilities, 
     insurancePolicies, mappingTemplates, isLoaded
@@ -107,11 +109,11 @@ const App: React.FC = () => {
     }, 0);
 
     const saldoImobilizado = fixedAssets.filter(filter).reduce((acc, f) => acc + f.valorMercado, 0);
-    const saldoPassivos = liabilities.filter(filter).reduce((acc, l) => acc + l.saldoDevedor, 0);
     const faturaCartao = cardTransactions.filter(t => t.status !== 'Pago').reduce((acc, t) => acc + t.valor, 0);
+    const saldoPassivos = liabilities.filter(filter).reduce((acc, l) => acc + l.saldoDevedor, 0) + faturaCartao;
 
     const totalAtivos = saldoBancos + saldoInvest + saldoImobilizado;
-    const totalPassivos = saldoPassivos + faturaCartao;
+    const totalPassivos = saldoPassivos;
 
     return {
       contas: saldoBancos,
@@ -125,7 +127,7 @@ const App: React.FC = () => {
   if (!isLoaded) return null;
 
   const appState: AppState = {
-    entities, categories, categoryMappings, instituicoes, transactions, 
+    entities, categories, categoryMappings, merchantRules, instituicoes, transactions, 
     creditCards, cardTransactions, patrimonioLiquido: totals.patrimonioLiquido,
     assets, assetClasses, indexers, assetSnapshots,
     fixedAssets, fixedAssetSnapshots, liabilities, insurancePolicies, mappingTemplates
@@ -196,16 +198,38 @@ const App: React.FC = () => {
                       state={appState} 
                       onUpdateCards={setCreditCards} 
                       onUpdateCardTransactions={setCardTransactions} 
-                      onUpdateCategoryMappings={setCategoryMappings}
+                      onUpdateTransactions={setTransactions}
+                      onUpdateMerchantRules={setMerchantRules}
                       isConfidential={isConfidential}
                     />
                   );
                 case 'dre':
                   return <DREView state={appState} transactions={transactions.filter(t => globalEntityFilter === 'all' || t.entidadeId === globalEntityFilter)} categories={categories} snapshots={assetSnapshots} selectedMonth={selectedMonth} selectedYear={selectedYear} isConfidential={isConfidential} />;
                 case 'patrimonio':
-                  return <PatrimonioView state={appState} onUpdateFixedAssets={setFixedAssets} onUpdateLiabilities={setLiabilities} onUpdateInsurance={setInsurancePolicies} onSaveValuation={snaps => setFixedAssetSnapshots(p => [...p.filter(s => !snaps.some(n => n.fixedAssetId === s.fixedAssetId && n.mes === s.mes && n.ano === s.ano)), ...snaps])} selectedMonth={selectedMonth} selectedYear={selectedYear} isConfidential={isConfidential} globalEntityFilter={globalEntityFilter} />;
+                  return (
+                    <PatrimonioView 
+                      state={appState} 
+                      onUpdateFixedAssets={setFixedAssets} 
+                      onUpdateLiabilities={setLiabilities} 
+                      onUpdateInsurance={setInsurancePolicies} 
+                      onSaveValuation={snaps => setFixedAssetSnapshots(p => [...p.filter(s => !snaps.some(n => n.fixedAssetId === s.fixedAssetId && n.mes === s.mes && n.ano === s.ano)), ...snaps])} 
+                      selectedMonth={selectedMonth} 
+                      selectedYear={selectedYear} 
+                      isConfidential={isConfidential} 
+                      globalEntityFilter={globalEntityFilter} 
+                    />
+                  );
                 case 'importar':
-                  return <ImportView state={appState} onImportTransactions={txs => setTransactions(p => [...txs, ...p])} onImportCategories={setCategories} onImportAssets={setAssets} onImportSnapshots={setAssetSnapshots} onAddInstitution={i => setInstituicoes(p => [...p, i])} onSaveTemplate={t => setMappingTemplates(p => [...p, t])} />;
+                  return <ImportView 
+                    state={appState} 
+                    onImportTransactions={txs => setTransactions(p => [...txs, ...p])} 
+                    onImportCardTransactions={ctxs => setCardTransactions(p => [...ctxs, ...p])}
+                    onImportCategories={setCategories} 
+                    onImportAssets={setAssets} 
+                    onImportSnapshots={setAssetSnapshots} 
+                    onAddInstitution={i => setInstituicoes(p => [...p, i])} 
+                    onSaveTemplate={t => setMappingTemplates(p => [...p, t])} 
+                  />;
                 case 'configuracoes':
                   return <SettingsView state={appState} setEntities={setEntities} setCategories={setCategories} setInstituicoes={setInstituicoes} setAssetClasses={setAssetClasses} setIndexers={setIndexers} onImportData={d => {}} />;
                 default:

@@ -41,6 +41,12 @@ export interface CategoryMapping {
   categoryId: string;
 }
 
+export interface MerchantRule {
+  raw: string;
+  clean: string;
+  categoryId: string;
+}
+
 export interface CreditCard {
   id: string;
   nome: string;
@@ -58,16 +64,16 @@ export interface CardTransaction {
   id: string;
   cardId: string;
   dataCompra: string;
-  dataVencimentoFatura: string; // Mês/Ano da fatura onde cai o débito
+  dataVencimentoFatura: string; 
   descricao: string;
-  descricaoRaw?: string; // Como veio no banco
+  descricaoRaw?: string; 
   categoryId: string;
-  valor: number; // Valor da parcela
-  valorTotalCompra: number; // Valor total da compra (para DRE)
+  valor: number; 
+  valorTotalCompra: number; 
   parcelasTotal: number;
   parcelaAtual: number;
   status: CardTransactionStatus;
-  grupoId?: string; // Vínculo entre parcelas
+  grupoId?: string; 
 }
 
 export type TransactionClass = 'OPERACIONAL' | 'PAGAMENTO_FATURA' | 'TRANSFERENCIA_INTERNA';
@@ -95,7 +101,6 @@ export interface Transaction {
   impactaDRE: boolean;
 }
 
-// Added missing type definitions required by other components
 export type ViewType = 'dashboard' | 'investimentos' | 'conta-detalhe' | 'cartoes-lista' | 'dre' | 'patrimonio' | 'importar' | 'configuracoes';
 
 export type AssetStrategicClass = 'Liquidez' | 'Renda Variável' | 'Longo Prazo';
@@ -140,11 +145,15 @@ export interface MappingTemplate {
 }
 
 export type ValuationMethod = 'Valor de Mercado' | 'Custo de Aquisição';
+export type FixedAssetCategory = 'Imóvel' | 'Participação / Equity' | 'Bem Diverso';
+export type LegalType = 'Matrícula' | 'Contrato de Compra e Venda' | 'Contrato Social' | 'Outro';
 
 export interface FixedAsset {
   id: string;
   nome: string;
-  categoria: 'Imóvel' | 'Veículo' | 'Participação' | 'Outro';
+  categoria: FixedAssetCategory;
+  tipoJuridico: LegalType;
+  matricula?: string;
   valorAquisicao: number;
   valorMercado: number;
   entidadeId: string;
@@ -162,8 +171,10 @@ export interface FixedAssetSnapshot {
 export interface Liability {
   id: string;
   nome: string;
-  tipo: string;
+  tipo: 'Financiamento' | 'Empréstimo' | 'Consórcio' | 'Outro';
+  credor: string;
   taxa?: string;
+  prazo?: string;
   saldoDevedor: number;
   entidadeId: string;
 }
@@ -172,8 +183,10 @@ export interface InsurancePolicy {
   id: string;
   tipo: string;
   seguradora: string;
+  bemProtegidoId?: string; 
   valorSegurado: number;
   vigenciaFim: string;
+  beneficiario: string;
   entidadeId: string;
 }
 
@@ -182,6 +195,7 @@ export interface AppState {
   entities: Entity[];
   categories: Category[];
   categoryMappings: CategoryMapping[];
+  merchantRules: MerchantRule[];
   assets: Asset[];
   assetClasses: AssetClass[];
   indexers: Indexer[];

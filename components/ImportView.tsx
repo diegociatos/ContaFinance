@@ -10,39 +10,35 @@ import {
   AssetClass, 
   Indexer, 
   MappingTemplate, 
-  DRE_GROUPS 
+  CardTransaction,
+  DRE_GROUPS,
+  AppState
 } from '../types';
 import { 
   Upload, 
-  ChevronRight, 
   Database, 
   CheckCircle2, 
   Tag,
-  Building2,
-  Coins,
   Calculator,
-  Save,
-  Layers,
-  FileDown,
-  Info,
-  ShieldCheck,
-  ArrowRight
+  FileUp,
+  ArrowRight,
+  CreditCard,
+  AlertTriangle,
+  TrendingUp,
+  Download,
+  FileSpreadsheet,
+  X,
+  History,
+  Sparkles,
+  Layers
 } from 'lucide-react';
 
-type ImportType = 'categorias' | 'fluxo' | 'ativos' | 'fechamento';
+type ImportType = 'categorias_dre' | 'fluxo' | 'ativos' | 'fatura_cartao';
 
 interface ImportViewProps {
-  state: {
-    entities: Entity[];
-    instituicoes: Institution[];
-    categories: Category[];
-    transactions: Transaction[];
-    assets: Asset[];
-    assetClasses: AssetClass[];
-    indexers: Indexer[];
-    mappingTemplates: MappingTemplate[];
-  };
+  state: AppState;
   onImportTransactions: (txs: Transaction[]) => void;
+  onImportCardTransactions: (txs: CardTransaction[]) => void;
   onImportCategories: (cats: Category[]) => void;
   onImportAssets: (assets: Asset[]) => void;
   onImportSnapshots: (snaps: AssetSnapshot[]) => void;
@@ -50,336 +46,268 @@ interface ImportViewProps {
   onSaveTemplate: (tmpl: MappingTemplate) => void;
 }
 
-const FIELD_DEFINITIONS: Record<ImportType, { label: string; fields: { key: string; label: string; required: boolean }[] }> = {
-  categorias: {
-    label: 'Categorias de Controladoria',
-    fields: [
-      { key: 'nome', label: 'Nome da Categoria', required: true },
-      { key: 'tipo', label: 'Tipo (receita/despesa)', required: true },
-      { key: 'grupo', label: 'Grupo DRE', required: true },
-      { key: 'isOperating', label: 'Operacional (Sim/Não)', required: false },
-    ]
-  },
-  fluxo: {
-    label: 'Fluxo de Caixa (Extrato)',
-    fields: [
-      { key: 'data', label: 'Data', required: true },
-      { key: 'valor', label: 'Valor', required: true },
-      { key: 'referencia', label: 'Referência / Categoria', required: true },
-      { key: 'detalhes', label: 'Detalhes / Histórico', required: false },
-    ]
-  },
-  ativos: {
-    label: 'Carteira de Ativos Financeiros',
-    fields: [
-      { key: 'nome', label: 'Nome do Título', required: true },
-      { key: 'instituicao', label: 'Instituição Custodiante', required: true },
-      { key: 'classe', label: 'Classe de Ativo', required: true },
-      { key: 'indexador', label: 'Indexador (Benchmark)', required: true },
-    ]
-  },
-  fechamento: {
-    label: 'Saldos Mensais (Patrimonial)',
-    fields: [
-      { key: 'ativoNome', label: 'Nome do Ativo', required: true },
-      { key: 'saldoFinal', label: 'Saldo Final (R$)', required: true },
-      { key: 'mes', label: 'Mês de Referência', required: true },
-      { key: 'ano', label: 'Ano de Referência', required: true },
-    ]
-  }
+const OFFICIAL_TEMPLATES: Record<string, string[]> = {
+  fatura_cartao: ['cartao_nome', 'data_compra', 'descricao_original', 'valor', 'parcela_atual', 'parcelas_total', 'categoria_dre', 'entidade'],
+  fluxo: ['conta_nome', 'data', 'descricao', 'valor', 'tipo_movimentacao', 'categoria_dre', 'entidade'],
+  ativos: ['ativo_nome', 'tipo_ativo', 'classe_estratégica', 'indexador', 'taxa_indexador', 'valor_aplicado', 'saldo_atual', 'liquidez', 'entidade'],
+  categorias_dre: ['grupo_dre', 'categoria', 'tipo', 'operacionalidade', 'ativo', 'ordem']
 };
 
 const ImportView: React.FC<ImportViewProps> = ({ 
-  state, onImportTransactions, onImportCategories, onImportAssets, onImportSnapshots, onAddInstitution, onSaveTemplate 
+  state, onImportTransactions, onImportCardTransactions, onImportCategories, onImportAssets, onImportSnapshots, onAddInstitution, onSaveTemplate 
 }) => {
   const [step, setStep] = useState(1);
   const [importType, setImportType] = useState<ImportType | null>(null);
   const [csvHeaders, setCsvHeaders] = useState<string[]>([]);
-  const [csvData, setCsvData] = useState<string[][]>([]);
-  const [mapping, setMapping] = useState<Record<string, string>>({});
-  const [templateName, setTemplateName] = useState('');
-  const [destinationInstId, setDestinationInstId] = useState('');
-  const [statementFinalBalance, setStatementFinalBalance] = useState<string>('');
+  const [csvRows, setCsvRows] = useState<string[][]>([]);
   const [previewData, setPreviewData] = useState<any[]>([]);
-
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const selectedInstitution = useMemo(() => 
-    state.instituicoes.find(i => i.id === destinationInstId), 
-    [destinationInstId, state.instituicoes]
-  );
-
-  const handleSelectType = (type: ImportType) => {
-    setImportType(type);
-    setStep(2);
-  };
-
-  const downloadModel = () => {
-    if (!importType) return;
+  // --- DOWNLOAD DE MODELOS OFICIAIS ---
+  const handleDownloadModel = (type: ImportType) => {
     const delimiter = ";";
     const bom = "\uFEFF";
-    let content = "";
-    let filename = "";
+    let headers: string[] = OFFICIAL_TEMPLATES[type];
+    let rows: string[][] = [];
 
-    switch (importType) {
-      case 'fluxo':
-        filename = "modelo_importacao_fluxo.csv";
-        content = ["Data", "Valor", "Referencia", "Detalhes"].join(delimiter) + "\n" +
-                  ["01/01/2026", "5000,00", "Honorários", "Projeto Alpha"].join(delimiter);
-        break;
-      case 'categorias':
-        filename = "modelo_importacao_categorias.csv";
-        content = ["Nome", "Tipo", "Grupo DRE", "Operacional"].join(delimiter) + "\n" +
-                  ["Aluguel", "Despesa", "CUSTO DE VIDA SOBREVIVÊNCIA", "Sim"].join(delimiter);
-        break;
-      default:
-        filename = `modelo_${importType}.csv`;
-        content = FIELD_DEFINITIONS[importType].fields.map(f => f.label).join(delimiter);
+    if (type === 'categorias_dre') {
+      rows = [
+        ['RECEITAS OPERACIONAIS', 'Ciatos Consultoria', 'RECEITA', 'OPERACIONAL', 'SIM', '1'],
+        ['CUSTO DE VIDA SOBREVIVÊNCIA', 'Mercado', 'DESPESA', 'OPERACIONAL', 'SIM', '2'],
+        ['DESPESAS PROFISSIONAIS', 'Marketing Digital', 'DESPESA', 'OPERACIONAL', 'SIM', '3'],
+        ['MOVIMENTAÇÕES NÃO OPERACIONAIS', 'Dividendos Recebidos', 'RECEITA', 'NAO_OPERACIONAL', 'SIM', '4']
+      ];
+    } else if (type === 'fatura_cartao') {
+      rows = [['VISA INFINITE', '20/01/2026', 'APPLE STORE', '4500,00', '1', '10', 'INVESTIMENTOS', 'DIEGO GARCIA']];
+    } else if (type === 'fluxo') {
+      rows = [['BANCO ITAU', '20/01/2026', 'RECEBIMENTO CLIENTE A', '15000,00', 'ENTRADA', 'RECEITAS OPERACIONAIS', 'HOLDING GARCIA']];
+    } else if (type === 'ativos') {
+      rows = [['TESOURO IPCA+ 2035', 'RENDA FIXA', 'LONGO PRAZO', 'IPCA', '5,5', '50000,00', '52500,00', 'D+1', 'DIEGO PF']];
     }
 
-    const blob = new Blob([bom + content], { type: 'text/csv;charset=utf-8;' });
+    const csvContent = bom + headers.join(delimiter) + "\n" + rows.map(r => r.join(delimiter)).join("\n");
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.setAttribute('download', filename);
-    document.body.appendChild(link);
+    link.setAttribute('download', `template_ledger_${type}.csv`);
     link.click();
-    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   };
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // --- MOTOR DE INGESTÃO ---
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file) return;
+    if (!file || !importType) return;
 
     const reader = new FileReader();
     reader.onload = (event) => {
       const text = event.target?.result as string;
       const separator = text.includes(';') ? ';' : ',';
       const rows = text.split('\n').map(row => 
-        row.split(new RegExp(`${separator}(?=(?:(?:[^"]*"){2})*[^"]*$)`)).map(cell => cell.replace(/^"|"$/g, '').trim())
-      );
+        row.split(new RegExp(`${separator}(?=(?:(?:[^"]*"){2})*[^"]*$)`))
+           .map(cell => cell.trim().replace(/^"|"$/g, ''))
+      ).filter(r => r.length > 1 && !r.every(c => c === ''));
+      
       if (rows.length > 0) {
         setCsvHeaders(rows[0]);
-        setCsvData(rows.slice(1).filter(r => r.length > 1));
+        setCsvRows(rows.slice(1));
+        
+        // Mapeamento automático por nome de coluna
+        const headers = rows[0];
+        const data = rows.slice(1).map((row, idx) => {
+          const obj: any = { id: `imp-${idx}` };
+          headers.forEach((h, i) => {
+            const officialKey = OFFICIAL_TEMPLATES[importType].find(k => k === h.toLowerCase());
+            if (officialKey) obj[officialKey] = row[i];
+            else obj[h] = row[i];
+          });
+          return obj;
+        });
+
+        setPreviewData(data);
         setStep(3);
       }
     };
     reader.readAsText(file);
   };
 
-  const handleProcessMapping = () => {
-    if (!importType) return;
-    const fields = FIELD_DEFINITIONS[importType].fields;
-    const processed = csvData.map((row, idx) => {
-      const obj: any = { id: idx };
-      fields.forEach(f => {
-        const headerIdx = csvHeaders.indexOf(mapping[f.key]);
-        obj[f.key] = headerIdx !== -1 ? row[headerIdx] : '';
-      });
-      return obj;
-    });
-    setPreviewData(processed);
-    setStep(4);
-  };
+  const finalizeImport = () => {
+    if (importType === 'categorias_dre') {
+      const newCats: Category[] = previewData.map(p => ({
+        id: 'cat-' + Math.random().toString(36).substr(2, 9),
+        nome: String(p.categoria || p.Nome || '').toUpperCase(),
+        tipo: (p.tipo || '').toLowerCase().includes('receita') ? 'receita' : 'despesa',
+        grupo: (p.grupo_dre || p.Grupo || 'DESPESAS PROFISSIONAIS') as any,
+        isOperating: !(p.operacionalidade || '').toLowerCase().includes('nao')
+      }));
 
-  const sanitizeVal = (val: string) => {
-    if (!val) return 0;
-    const clean = val.replace(/[R$\s]/g, '').replace(/\./g, '').replace(',', '.');
-    return parseFloat(clean) || 0;
-  };
-
-  const handleFinalImport = () => {
-    if (!importType) return;
-    
-    switch (importType) {
-      case 'fluxo':
-        if (!destinationInstId) return alert('Selecione uma conta de destino.');
-        // Fixed the mapping to include missing required properties from Transaction interface
-        const txs: Transaction[] = previewData.map(p => {
-          const valor = sanitizeVal(p.valor);
-          const cat = state.categories.find(c => c.nome.toLowerCase() === String(p.referencia).toLowerCase());
-          return {
-            id: 'tx-' + Math.random().toString(36).substr(2, 9),
-            data: p.data,
-            dataCompetencia: p.data,
-            dataCaixa: p.data,
-            tipo: valor > 0 ? 'entrada' : 'saida',
-            valor: Math.abs(valor),
-            referencia: cat?.id || state.categories[0]?.id || '',
-            entidadeId: selectedInstitution?.entidadeId || '',
-            instituicaoId: destinationInstId,
-            detalhes: p.detalhes || '',
-            meioPagamento: 'dinheiro_pix_debito',
-            tipoLancamento: 'OPERACIONAL',
-            impactaDRE: true
-          };
-        });
-        onImportTransactions(txs);
-        break;
-
-      case 'categorias':
-        const cats: Category[] = previewData.map(p => ({
-          id: 'cat-' + Math.random().toString(36).substr(2, 5),
-          nome: p.nome,
-          tipo: String(p.tipo).toLowerCase().includes('receita') ? 'receita' : 'despesa',
-          grupo: p.grupo as any,
-          isOperating: String(p.isOperating).toLowerCase() === 'sim'
-        }));
-        onImportCategories(cats);
-        break;
-
-      case 'ativos':
-        // FIX: Adding the required 'strategicClass' property to satisfy Asset interface.
-        const assets: Asset[] = previewData.map(p => {
-          const inst = state.instituicoes.find(i => i.nome.toLowerCase().includes(String(p.instituicao).toLowerCase()));
-          const cls = state.assetClasses.find(c => c.nome.toLowerCase() === String(p.classe).toLowerCase());
-          const idx = state.indexers.find(i => i.nome.toLowerCase() === String(p.indexador).toLowerCase());
-          return {
-            id: 'asset-' + Math.random().toString(36).substr(2, 5),
-            nome: p.nome,
-            instituicaoId: inst?.id || state.instituicoes[0].id,
-            classId: cls?.id || state.assetClasses[0].id,
-            indexerId: idx?.id || state.indexers[0].id,
-            entidadeId: inst?.entidadeId || state.entities[0].id,
-            liquidez: 'D+0',
-            strategicClass: 'Liquidez'
-          };
-        });
-        onImportAssets(assets);
-        break;
+      // Persistência em dreCategories como solicitado + Estado Global
+      const existing = JSON.parse(localStorage.getItem('dreCategories') || '[]');
+      const combined = [...existing, ...newCats];
+      localStorage.setItem('dreCategories', JSON.stringify(combined));
+      
+      onImportCategories([...state.categories, ...newCats]);
+      alert(`${newCats.length} categorias integradas ao Plano de Contas.`);
     }
-    setStep(5);
+
+    if (importType === 'fatura_cartao') {
+      const txs: CardTransaction[] = previewData.map(p => ({
+        id: 'ctx-' + Math.random().toString(36).substr(2, 9),
+        cardId: state.creditCards.find(c => c.nome.toUpperCase().includes(String(p.cartao_nome).toUpperCase()))?.id || 'unknown',
+        dataCompra: p.data_compra,
+        dataVencimentoFatura: '',
+        descricao: String(p.descricao_original).toUpperCase(),
+        descricaoRaw: p.descricao_original,
+        categoryId: state.categories.find(c => c.nome.toUpperCase() === String(p.categoria_dre).toUpperCase())?.id || '',
+        valor: parseFloat(p.valor.replace(',', '.')) || 0,
+        valorTotalCompra: parseFloat(p.valor.replace(',', '.')) || 0,
+        parcelasTotal: parseInt(p.parcelas_total) || 1,
+        parcelaAtual: parseInt(p.parcela_atual) || 1,
+        status: 'Pendente'
+      }));
+      onImportCardTransactions(txs);
+      alert(`${txs.length} lançamentos de cartão importados.`);
+    }
+
+    setStep(1);
+    setImportType(null);
   };
 
   return (
-    <div className="max-w-6xl mx-auto space-y-10 pb-20">
-      <div className="flex items-center justify-center gap-8 mb-10 bg-[#111111] p-6 rounded-[2rem] border border-[#262626]">
-        {[1, 2, 3, 4].map(s => (
-          <div key={s} className="flex items-center gap-3">
-            <div className={`w-8 h-8 rounded-full border-2 flex items-center justify-center text-xs font-black ${step >= s ? 'border-[#D4AF37] text-[#D4AF37] bg-[#D4AF37]/10' : 'border-[#262626] text-slate-600'}`}>{s}</div>
-            <span className={`text-[10px] font-black uppercase tracking-widest ${step >= s ? 'text-[#F5F5F5]' : 'text-slate-600'}`}>{s === 1 ? 'Tipo' : s === 2 ? 'Upload' : s === 3 ? 'Mapear' : 'Revisar'}</span>
-            {s < 4 && <ArrowRight size={14} className="text-[#262626] ml-4" />}
-          </div>
-        ))}
-      </div>
-
+    <div className="space-y-12 animate-in fade-in duration-700 font-sans">
+      
+      {/* 1. CENTRAL DE MODELOS (TEMPLATES) */}
       {step === 1 && (
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-          <ImportCard icon={<Database className="text-blue-500" />} title="Fluxo Bancário" desc="Extratos CSV de bancos tradicionais" onClick={() => handleSelectType('fluxo')} />
-          <ImportCard icon={<Layers className="text-emerald-500" />} title="Categorias" desc="Dicionário de contas DRE" onClick={() => handleSelectType('categorias')} />
-          <ImportCard icon={<Coins className="text-amber-500" />} title="Carteira" desc="Lista de Ativos e Títulos" onClick={() => handleSelectType('ativos')} />
-          <ImportCard icon={<Calculator className="text-slate-400" />} title="Fechamento" desc="Saldos mensais históricos" onClick={() => handleSelectType('fechamento')} />
+        <div className="space-y-10">
+          <div className="text-center space-y-4">
+            <h2 className="text-3xl font-bold uppercase tracking-[0.1em] text-[#D4AF37] font-serif-luxury leading-none">Central de Modelos de Importação</h2>
+            <div className="flex items-center justify-center gap-3 bg-amber-500/10 border border-amber-500/20 py-3 px-6 rounded-xl w-fit mx-auto">
+              <AlertTriangle size={18} className="text-amber-500" />
+              <p className="text-[10px] font-black uppercase text-amber-500 tracking-widest">Aviso: O sistema mapeia colunas oficiais automaticamente. Outros formatos requerem ancoragem manual.</p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+            <TemplateCard 
+              title="Fatura de Cartão" 
+              desc="Mapeamento para faturas bancárias (.csv)" 
+              icon={<CreditCard size={28} />}
+              onDownload={() => handleDownloadModel('fatura_cartao')}
+              onImport={() => { setImportType('fatura_cartao'); setStep(2); }}
+            />
+            <TemplateCard 
+              title="Extrato Bancário" 
+              desc="Fluxo diário de contas PF ou PJ." 
+              icon={<Database size={28} />}
+              onDownload={() => handleDownloadModel('fluxo')}
+              onImport={() => { setImportType('fluxo'); setStep(2); }}
+            />
+            <TemplateCard 
+              title="Carteira (Ativos)" 
+              desc="Gestão de saldos e ativos estratégicos." 
+              icon={<TrendingUp size={28} />}
+              onDownload={() => handleDownloadModel('ativos')}
+              onImport={() => { setImportType('ativos'); setStep(2); }}
+            />
+            <TemplateCard 
+              title="Categorias (DRE)" 
+              desc="Plano de Contas Gerenciais e Alocação." 
+              icon={<Layers size={28} />}
+              onDownload={() => handleDownloadModel('categorias_dre')}
+              onImport={() => { setImportType('categorias_dre'); setStep(2); }}
+              highlight
+            />
+          </div>
         </div>
       )}
 
-      {step === 2 && importType && (
-        <div className="bg-[#1A1A1A] p-20 rounded-[3rem] border border-[#262626] text-center space-y-10">
-          <Upload size={48} className="text-[#D4AF37] mx-auto" />
-          <div className="max-w-md mx-auto space-y-4">
-            <h3 className="text-2xl font-black italic uppercase text-[#F5F5F5]">Carregamento de Dados</h3>
-            <p className="text-sm text-[#94A3B8]">Você está importando: <b>{FIELD_DEFINITIONS[importType].label}</b></p>
+      {/* 2. UPLOAD STEP */}
+      {step === 2 && (
+        <div className="max-w-3xl mx-auto luxury-card p-16 text-center space-y-10 animate-in zoom-in-95">
+          <div className="p-6 bg-black rounded-3xl border border-[#D4AF37]/30 text-[#D4AF37] w-fit mx-auto shadow-2xl">
+            <Upload size={48} />
           </div>
-
-          {importType === 'fluxo' && (
-            <div className="max-w-xl mx-auto grid grid-cols-1 md:grid-cols-2 gap-6 text-left">
-              <div className="space-y-2">
-                <label className="label-text">Conta de Destino</label>
-                <select className="w-full p-4" value={destinationInstId} onChange={e => setDestinationInstId(e.target.value)}>
-                  <option value="">Selecione...</option>
-                  {state.instituicoes.map(i => <option key={i.id} value={i.id}>{i.nome}</option>)}
-                </select>
-              </div>
-              <div className="space-y-2">
-                <label className="label-text">Saldo Final do Extrato</label>
-                <input type="text" className="w-full p-4" placeholder="R$ 0,00" value={statementFinalBalance} onChange={e => setStatementFinalBalance(e.target.value)} />
-              </div>
-            </div>
-          )}
-
+          <div>
+            <h3 className="text-2xl font-bold text-white uppercase font-serif-luxury tracking-widest">Ingestão de Dados Digitais</h3>
+            <p className="label-text mt-3">Preparando motor para: {importType?.replace('_', ' ').toUpperCase()}</p>
+          </div>
           <div 
+            className="border-2 border-dashed border-[#262626] rounded-[2rem] p-20 hover:border-[#D4AF37]/50 transition-all cursor-pointer group"
             onClick={() => fileInputRef.current?.click()}
-            className="border-2 border-dashed border-[#262626] rounded-[2rem] p-16 cursor-pointer hover:border-[#D4AF37] transition-all group"
           >
-            <p className="text-[10px] font-black uppercase text-slate-500 group-hover:text-[#D4AF37] transition-colors">Clique para selecionar o arquivo CSV</p>
-            <input type="file" ref={fileInputRef} className="hidden" accept=".csv" onChange={handleFileUpload} />
+            <FileSpreadsheet size={64} className="mx-auto text-slate-700 group-hover:text-[#D4AF37] mb-6 transition-colors" />
+            <p className="text-[11px] font-black uppercase text-slate-500 tracking-widest">Selecione o arquivo CSV exportado</p>
+            <input type="file" ref={fileInputRef} className="hidden" accept=".csv" onChange={handleFileChange} />
           </div>
-
-          <button onClick={downloadModel} className="flex items-center gap-2 mx-auto text-[#D4AF37] text-[10px] font-black uppercase tracking-widest hover:underline">
-            <FileDown size={14} /> Baixar Modelo Exemplo
-          </button>
+          <button onClick={() => setStep(1)} className="text-[10px] font-black uppercase text-slate-600 hover:text-white transition-colors tracking-[0.2em]">Cancelar Operação</button>
         </div>
       )}
 
-      {step === 3 && importType && (
-        <div className="bg-[#1A1A1A] p-12 rounded-[3rem] border border-[#262626] space-y-10">
-          <h3 className="text-xl font-black text-[#F5F5F5] uppercase italic tracking-widest">Mapeamento de Colunas</h3>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-            {FIELD_DEFINITIONS[importType].fields.map(field => (
-              <div key={field.key} className="p-6 bg-[#111111] rounded-2xl border border-[#262626] flex items-center justify-between">
-                <div>
-                  <p className="text-[10px] font-black text-[#F5F5F5] uppercase">{field.label} {field.required && '*'}</p>
-                </div>
-                <select className="w-48" value={mapping[field.key] || ''} onChange={e => setMapping({...mapping, [field.key]: e.target.value})}>
-                  <option value="">Não mapeado</option>
-                  {csvHeaders.map(h => <option key={h} value={h}>{h}</option>)}
-                </select>
-              </div>
-            ))}
-          </div>
-          <div className="flex justify-end gap-6 pt-10">
-            <button onClick={() => setStep(2)} className="text-[#94A3B8] font-black text-[10px] uppercase">Voltar</button>
-            <button onClick={handleProcessMapping} className="luxury-button px-10 py-4">Processar Dados</button>
-          </div>
-        </div>
-      )}
-
-      {step === 4 && (
-        <div className="space-y-8 animate-in slide-in-from-right-10">
-          <div className="bg-slate-900 p-10 rounded-[2.5rem] flex justify-between items-center">
+      {/* 3. REVIEW STEP */}
+      {step === 3 && (
+        <div className="space-y-8 animate-in fade-in">
+          <div className="bg-[#111111] p-10 rounded-[2.5rem] border border-[#262626] flex justify-between items-center shadow-2xl">
             <div>
-              <h3 className="text-xl font-black italic uppercase text-[#F5F5F5]">Conferência Final</h3>
-              <p className="text-[10px] text-[#D4AF37] font-bold uppercase mt-1">Verifique as inconsistências antes de gravar no banco</p>
+              <h3 className="text-2xl font-bold text-white uppercase font-serif-luxury">Auditoria de Pré-Importação</h3>
+              <p className="label-text mt-2 text-[#D4AF37]">{previewData.length} registros identificados para processamento</p>
             </div>
-            <button onClick={handleFinalImport} className="luxury-button px-12 py-4">Efetivar Importação</button>
+            <div className="flex gap-4">
+              <button onClick={() => setStep(2)} className="px-8 py-4 text-[10px] font-black uppercase text-slate-500 hover:text-white">Trocar Arquivo</button>
+              <button onClick={finalizeImport} className="luxury-button px-16 py-4 flex items-center gap-3">EFETIVAR IMPORTAÇÃO <CheckCircle2 size={16} /></button>
+            </div>
           </div>
-          <div className="luxury-card overflow-hidden overflow-x-auto">
-            <table className="w-full text-left">
-              <thead>
-                <tr className="bg-[#111111] text-[9px] font-black uppercase text-slate-500 tracking-widest border-b border-[#262626]">
-                  {importType && FIELD_DEFINITIONS[importType].fields.map(f => <th key={f.key} className="px-8 py-5">{f.label}</th>)}
-                </tr>
-              </thead>
-              <tbody className="text-[11px]">
-                {previewData.map((row, i) => (
-                  <tr key={i} className="border-b border-white/5 hover:bg-white/[0.02]">
-                    {importType && FIELD_DEFINITIONS[importType].fields.map(f => (
-                      <td key={f.key} className="px-8 py-4 font-bold text-[#F5F5F5] italic">{row[f.key]}</td>
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
 
-      {step === 5 && (
-        <div className="bg-[#1A1A1A] p-20 rounded-[3rem] border border-[#262626] text-center space-y-10">
-          <CheckCircle2 size={64} className="text-emerald-500 mx-auto" />
-          <h3 className="text-3xl font-black italic uppercase text-[#F5F5F5]">Sucesso na Importação</h3>
-          <p className="text-[#94A3B8]">Os dados foram persistidos e consolidados no seu Ledger Privado.</p>
-          <button onClick={() => window.location.reload()} className="luxury-button px-16 py-5">Ir para Dashboard</button>
+          <div className="luxury-card overflow-hidden bg-black/40">
+             <table className="w-full text-left">
+               <thead>
+                 <tr className="bg-[#0A0A0A] text-[10px] font-black uppercase text-slate-500 tracking-widest border-b border-[#262626]">
+                    {OFFICIAL_TEMPLATES[importType!]?.map(h => <th key={h} className="px-8 py-6">{h.replace('_', ' ')}</th>)}
+                 </tr>
+               </thead>
+               <tbody className="divide-y divide-white/5 font-bold text-[11px]">
+                  {previewData.slice(0, 50).map((row, i) => (
+                    <tr key={i} className="hover:bg-white/[0.02]">
+                       {OFFICIAL_TEMPLATES[importType!]?.map(h => (
+                         <td key={h} className="px-8 py-5 text-slate-300 uppercase">{row[h] || '--'}</td>
+                       ))}
+                    </tr>
+                  ))}
+               </tbody>
+             </table>
+          </div>
         </div>
       )}
     </div>
   );
 };
 
-const ImportCard = ({ icon, title, desc, onClick }: any) => (
-  <div onClick={onClick} className="bg-[#1A1A1A] p-10 rounded-[2.5rem] border border-[#262626] hover:border-[#D4AF37] transition-all cursor-pointer group flex flex-col items-center text-center">
-    <div className="p-5 bg-[#111111] rounded-2xl mb-6 group-hover:bg-[#D4AF37]/10 transition-all">{icon}</div>
-    <h4 className="text-sm font-black text-[#F5F5F5] uppercase italic">{title}</h4>
-    <p className="text-[10px] text-[#94A3B8] mt-2 leading-relaxed">{desc}</p>
+const TemplateCard = ({ title, desc, icon, onDownload, onImport, highlight }: any) => (
+  <div className={`luxury-card p-10 flex flex-col justify-between group transition-all duration-500 bg-gradient-to-br from-[#1A1A1A] to-[#0A0A0A] ${highlight ? 'border-[#D4AF37] shadow-[0_0_30px_rgba(212,175,55,0.1)]' : 'hover:border-[#D4AF37]/50'}`}>
+    <div className="space-y-6">
+      <div className="p-4 bg-black rounded-2xl border border-[#262626] text-[#D4AF37] w-fit shadow-xl group-hover:scale-110 transition-transform">
+        {icon}
+      </div>
+      <div>
+        <h4 className="text-xl font-bold text-white uppercase font-serif-luxury tracking-wider mb-2 leading-none">{title}</h4>
+        <p className="text-[11px] font-semibold text-slate-500 leading-relaxed font-sans">{desc}</p>
+      </div>
+    </div>
+    
+    <div className="mt-10 space-y-3">
+      <button 
+        onClick={onImport}
+        className="flex items-center justify-center gap-3 w-full py-4 text-[10px] font-black uppercase tracking-[0.2em] bg-[#D4AF37] text-black rounded-xl hover:brightness-110 transition-all shadow-lg"
+      >
+        <Upload size={14} /> IMPORTAR AGORA
+      </button>
+      <button 
+        onClick={onDownload} 
+        className="flex items-center justify-center gap-3 w-full py-4 text-[9px] font-black uppercase tracking-[0.2em] border border-[#262626] text-slate-400 rounded-xl hover:border-[#D4AF37]/30 hover:text-[#D4AF37] transition-all"
+      >
+        <Download size={14} /> BAIXAR MODELO
+      </button>
+    </div>
   </div>
 );
 
