@@ -36,38 +36,9 @@ export interface Category {
   isOperating: boolean;
 }
 
-export interface AssetClass {
-  id: string;
-  nome: string;
-}
-
-export interface Indexer {
-  id: string;
-  nome: string;
-}
-
-export type AssetStrategicClass = 'Liquidez' | 'Renda Variável' | 'Longo Prazo';
-
-export interface Asset {
-  id: string;
-  nome: string;
-  instituicaoId: string;
-  classId: string;
-  indexerId: string;
-  liquidez: string;
-  entidadeId: string;
-  strategicClass: AssetStrategicClass;
-}
-
-export interface AssetSnapshot {
-  id: string;
-  assetId: string;
-  mes: number;
-  ano: number;
-  saldoFinal: number;
-  aportes: number;
-  resgates: number;
-  rendimento: number;
+export interface CategoryMapping {
+  establishmentRaw: string;
+  categoryId: string;
 }
 
 export interface CreditCard {
@@ -87,26 +58,17 @@ export interface CardTransaction {
   id: string;
   cardId: string;
   dataCompra: string;
+  dataVencimentoFatura: string; // Mês/Ano da fatura onde cai o débito
   descricao: string;
+  descricaoRaw?: string; // Como veio no banco
   categoryId: string;
-  valor: number;
+  valor: number; // Valor da parcela
+  valorTotalCompra: number; // Valor total da compra (para DRE)
   parcelasTotal: number;
   parcelaAtual: number;
   status: CardTransactionStatus;
-  grupoId?: string;
+  grupoId?: string; // Vínculo entre parcelas
 }
-
-export type ViewType = 
-  | 'dashboard' 
-  | 'conta-detalhe'
-  | 'investimentos'
-  | 'dre' | 'patrimonio' | 'configuracoes'
-  | 'categorias'
-  | 'instituicoes'
-  | 'importar'
-  | 'cartoes-lista'
-  | 'cartoes-lancamentos'
-  | 'cartoes-importar';
 
 export type TransactionClass = 'OPERACIONAL' | 'PAGAMENTO_FATURA' | 'TRANSFERENCIA_INTERNA';
 
@@ -133,26 +95,60 @@ export interface Transaction {
   impactaDRE: boolean;
 }
 
+// Added missing type definitions required by other components
+export type ViewType = 'dashboard' | 'investimentos' | 'conta-detalhe' | 'cartoes-lista' | 'dre' | 'patrimonio' | 'importar' | 'configuracoes';
+
+export type AssetStrategicClass = 'Liquidez' | 'Renda Variável' | 'Longo Prazo';
+
+export interface Asset {
+  id: string;
+  nome: string;
+  instituicaoId: string;
+  classId: string;
+  indexerId: string;
+  entidadeId: string;
+  liquidez: string;
+  strategicClass: AssetStrategicClass;
+}
+
+export interface AssetSnapshot {
+  id: string;
+  assetId: string;
+  mes: number;
+  ano: number;
+  saldoFinal: number;
+  aportes: number;
+  resgates: number;
+  rendimento: number;
+}
+
+export interface AssetClass {
+  id: string;
+  nome: string;
+}
+
+export interface Indexer {
+  id: string;
+  nome: string;
+}
+
 export interface MappingTemplate {
   id: string;
   nome: string;
-  tipoImportacao: 'categorias' | 'fluxo' | 'ativos' | 'fechamento' | 'fatura-cartao';
+  tipo: string;
   mapping: Record<string, string>;
 }
 
-export type ValuationMethod = 'Múltiplo de EBITDA' | 'Fluxo de Caixa Descontado' | 'Valor de Mercado' | 'Patrimônio Líquido Ajustado';
+export type ValuationMethod = 'Valor de Mercado' | 'Custo de Aquisição';
 
 export interface FixedAsset {
   id: string;
   nome: string;
-  categoria: 'Imóvel' | 'Veículo' | 'Participação' | 'Equipamento' | 'Outro';
+  categoria: 'Imóvel' | 'Veículo' | 'Participação' | 'Outro';
   valorAquisicao: number;
   valorMercado: number;
   entidadeId: string;
-  dataAquisicao?: string;
-  observacoes?: string;
-  percentParticipation?: number;
-  valuationMethod?: ValuationMethod;
+  valuationMethod: ValuationMethod;
 }
 
 export interface FixedAssetSnapshot {
@@ -160,35 +156,32 @@ export interface FixedAssetSnapshot {
   fixedAssetId: string;
   mes: number;
   ano: number;
-  valorEquity: number;
+  valorMercado: number;
 }
 
 export interface Liability {
   id: string;
   nome: string;
-  tipo: 'Financiamento' | 'Empréstimo' | 'Parcelamento' | 'Cartão' | 'Outro';
-  entidadeId: string;
-  saldoDevedor: number;
-  valorParcela?: number;
+  tipo: string;
   taxa?: string;
-  dataFim?: string;
+  saldoDevedor: number;
+  entidadeId: string;
 }
 
 export interface InsurancePolicy {
   id: string;
-  tipo: 'Imóvel' | 'Vida' | 'Veículo' | 'Responsabilidade' | 'Outro';
+  tipo: string;
   seguradora: string;
-  assetId?: string;
   valorSegurado: number;
-  premioAnual: number;
-  vigenciaInicio: string;
   vigenciaFim: string;
+  entidadeId: string;
 }
 
 export interface AppState {
   instituicoes: Institution[];
   entities: Entity[];
   categories: Category[];
+  categoryMappings: CategoryMapping[];
   assets: Asset[];
   assetClasses: AssetClass[];
   indexers: Indexer[];

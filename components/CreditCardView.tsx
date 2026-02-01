@@ -1,5 +1,5 @@
 
-import React, { useState, useMemo, useRef } from 'react';
+import React, { useState, useMemo } from 'react';
 import { 
   CreditCard as CreditCardType, 
   CardTransaction, 
@@ -7,11 +7,13 @@ import {
   Entity, 
   Institution, 
   Transaction,
-  CardTransactionStatus
+  CategoryMapping
 } from '../types';
 import { 
   CreditCard as CardIcon, Plus, Trash2, Calendar, Tag, FileText, 
-  ArrowRight, Landmark, ShieldCheck, Layers, Info, CheckCircle2, Upload, FileDown, Database, AlertCircle, RefreshCw
+  ArrowRight, Landmark, ShieldCheck, Layers, Info, CheckCircle2, 
+  Search, RefreshCw, TrendingDown, Clock, ChevronRight, AlertCircle,
+  ArrowDownLeft, History, Calculator
 } from 'lucide-react';
 
 interface CreditCardViewProps {
@@ -22,462 +24,408 @@ interface CreditCardViewProps {
     entities: Entity[];
     instituicoes: Institution[];
     transactions: Transaction[];
+    categoryMappings: CategoryMapping[];
   };
   onUpdateCards: (cards: CreditCardType[]) => void;
   onUpdateCardTransactions: (txs: CardTransaction[]) => void;
-  onAddBankTransaction: (tx: Transaction) => void;
-  activeSubTab: 'cards' | 'txs' | 'import';
+  onUpdateCategoryMappings: (mappings: CategoryMapping[]) => void;
+  onAddBankTransaction?: (tx: Transaction) => void;
   isConfidential: boolean;
 }
 
 const CreditCardView: React.FC<CreditCardViewProps> = ({ 
-  state, onUpdateCards, onUpdateCardTransactions, activeSubTab, isConfidential 
+  state, onUpdateCards, onUpdateCardTransactions, onUpdateCategoryMappings, isConfidential 
 }) => {
-  const [subTab, setSubTab] = useState<'cards' | 'txs' | 'import'>(activeSubTab);
+  const [activeTab, setActiveTab] = useState<'cards' | 'txs' | 'future' | 'recon'>('cards');
   const [selectedCardId, setSelectedCardId] = useState<string>(state.creditCards[0]?.id || '');
   const [showAddCard, setShowAddCard] = useState(false);
   
-  // States para Importação
-  const [importStep, setImportStep] = useState(1);
-  const [csvHeaders, setCsvHeaders] = useState<string[]>([]);
-  const [csvData, setCsvData] = useState<string[][]>([]);
-  const [mapping, setMapping] = useState<Record<string, string>>({});
-  const [importPreview, setImportPreview] = useState<{ new: CardTransaction[], reconciled: number } | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-
   const [txForm, setTxForm] = useState({
     data: new Date().toISOString().split('T')[0],
     descricao: '',
-    valor: '',
+    valorTotal: '',
     categoryId: '',
     parcelas: '1'
   });
 
-  const [cardForm, setCardForm] = useState({
-    nome: '',
-    bandeira: 'Visa' as any,
-    entidadeId: '',
-    instituicaoDebitoId: '',
-    diaFechamento: 10,
-    diaVencimento: 17,
-    limite: ''
-  });
+  const formatCurrency = (value: number) => {
+    const formatted = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value);
+    return isConfidential ? 'R$ ••••••••' : formatted;
+  };
 
   const currentCard = state.creditCards.find(c => c.id === selectedCardId);
 
-  // Lógica de Importação de CSV
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const text = event.target?.result as string;
-      const separator = text.includes(';') ? ';' : ',';
-      const rows = text.split('\n').map(row => 
-        row.split(new RegExp(`${separator}(?=(?:(?:[^"]*"){2})*[^"]*$)`)).map(cell => cell.replace(/^"|"$/g, '').trim())
-      );
-      if (rows.length > 0) {
-        setCsvHeaders(rows[0]);
-        setCsvData(rows.slice(1).filter(r => r.length > 1));
-        setImportStep(2);
-      }
-    };
-    reader.readAsText(file);
-  };
-
-  const processImport = () => {
-    if (!selectedCardId) return;
-    const newItems: CardTransaction[] = [];
-    let reconciledCount = 0;
-
-    csvData.forEach(row => {
-      const dataStr = row[csvHeaders.indexOf(mapping.data)];
-      const valorStr = row[csvHeaders.indexOf(mapping.valor)] || '0';
-      const descricao = row[csvHeaders.indexOf(mapping.descricao)] || 'IMPORTADO';
-      
-      const valor = Math.abs(parseFloat(valorStr.replace(/[R$\s]/g, '').replace(/\./g, '').replace(',', '.')));
-      const dataIso = dataStr?.split('/').reverse().join('-') || new Date().toISOString().split('T')[0];
-
-      // Inteligência de Conciliação
-      const isDuplicate = state.cardTransactions.some(t => 
-        t.cardId === selectedCardId && 
-        t.dataCompra === dataIso && 
-        Math.abs(t.valor - valor) < 0.01 &&
-        t.descricao.toLowerCase().includes(descricao.toLowerCase().substring(0, 5))
-      );
-
-      if (isDuplicate) {
-        reconciledCount++;
-      } else {
-        newItems.push({
-          id: 'ctx-' + Math.random().toString(36).substr(2, 9),
-          cardId: selectedCardId,
-          dataCompra: dataIso,
-          descricao: descricao.toUpperCase(),
-          categoryId: state.categories[0]?.id || '',
-          valor: valor,
-          parcelasTotal: 1,
-          parcelaAtual: 1,
-          status: 'Conciliado'
-        });
-      }
-    });
-
-    setImportPreview({ new: newItems, reconciled: reconciledCount });
-    setImportStep(3);
-  };
-
-  const finalizeImport = () => {
-    if (importPreview) {
-      onUpdateCardTransactions([...importPreview.new, ...state.cardTransactions]);
-      setImportStep(4);
-    }
-  };
-
-  const invoiceSummary = useMemo(() => {
-    if (!selectedCardId) return { total: 0, status: 'Pendente' };
-    const total = state.cardTransactions
-      .filter(t => t.cardId === selectedCardId && t.status !== 'Pago')
-      .reduce((acc, t) => acc + t.valor, 0);
+  // 1. Lógica de Faturas (Grouping)
+  const invoices = useMemo(() => {
+    if (!selectedCardId) return [];
+    const months: Record<string, { total: number; items: CardTransaction[]; status: 'Aberta' | 'Paga' }> = {};
     
-    const isPaid = state.transactions.some(t => t.isCardPayment && t.linkedCardId === selectedCardId);
-    return { total, status: isPaid ? 'Paga' : 'Pendente' };
-  }, [selectedCardId, state.cardTransactions, state.transactions]);
+    state.cardTransactions
+      .filter(t => t.cardId === selectedCardId)
+      .forEach(t => {
+        const monthKey = t.dataVencimentoFatura.substring(0, 7); // YYYY-MM
+        if (!months[monthKey]) months[monthKey] = { total: 0, items: [], status: 'Aberta' };
+        months[monthKey].total += t.valor;
+        months[monthKey].items.push(t);
+        if (t.status === 'Pago') months[monthKey].status = 'Paga';
+      });
 
-  const handleAddCard = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!cardForm.nome || !cardForm.entidadeId) return;
-    const newCard: CreditCardType = {
-      id: 'card-' + Math.random().toString(36).substr(2, 9),
-      nome: cardForm.nome,
-      bandeira: cardForm.bandeira,
-      entidadeId: cardForm.entidadeId,
-      instituicaoDebitoId: cardForm.instituicaoDebitoId,
-      diaFechamento: Number(cardForm.diaFechamento),
-      diaVencimento: Number(cardForm.diaVencimento),
-      limite: Number(cardForm.limite)
-    };
-    onUpdateCards([...state.creditCards, newCard]);
-    setShowAddCard(false);
+    return Object.entries(months)
+      .map(([month, data]) => ({ month, ...data }))
+      .sort((a, b) => b.month.localeCompare(a.month));
+  }, [selectedCardId, state.cardTransactions]);
+
+  // 2. Lógica de Conciliação
+  const bankPayments = useMemo(() => {
+    return state.transactions.filter(t => 
+      t.tipoLancamento === 'PAGAMENTO_FATURA' || 
+      t.detalhes.toLowerCase().includes('fatura') ||
+      t.detalhes.toLowerCase().includes('cartao')
+    );
+  }, [state.transactions]);
+
+  const handleConciliate = (monthKey: string, bankTxId: string) => {
+    const updatedTxs = state.cardTransactions.map(t => {
+      if (t.cardId === selectedCardId && t.dataVencimentoFatura.startsWith(monthKey)) {
+        return { ...t, status: 'Pago' as const };
+      }
+      return t;
+    });
+    onUpdateCardTransactions(updatedTxs);
+    alert(`Fatura de ${monthKey} conciliada com sucesso!`);
   };
 
   const handleAddTx = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!txForm.valor || !txForm.descricao || !txForm.categoryId || !selectedCardId) return;
+    if (!txForm.valorTotal || !txForm.descricao || !txForm.categoryId || !selectedCardId) return;
+    
     const numParcelas = Number(txForm.parcelas);
-    const valorTotal = parseFloat(txForm.valor);
+    const valorTotal = parseFloat(txForm.valorTotal);
     const valorParcela = valorTotal / numParcelas;
-    const grupoId = 'grp-' + Math.random().toString(36).substr(2, 9);
-    const newTxs: CardTransaction[] = [];
+    const grupoId = 'grp-' + Date.now();
     const baseDate = new Date(txForm.data);
+
+    const newTxs: CardTransaction[] = [];
     for (let i = 0; i < numParcelas; i++) {
-      const pDate = new Date(baseDate);
-      pDate.setMonth(pDate.getMonth() + i);
+      const dueDate = new Date(baseDate);
+      dueDate.setMonth(dueDate.getMonth() + i);
+      
       newTxs.push({
-        id: 'ctx-' + Math.random().toString(36).substr(2, 9),
+        id: `ctx-${grupoId}-${i}`,
         cardId: selectedCardId,
         dataCompra: txForm.data,
-        descricao: txForm.descricao + (numParcelas > 1 ? ` (${i + 1}/${numParcelas})` : ''),
+        dataVencimentoFatura: dueDate.toISOString().split('T')[0],
+        descricao: txForm.descricao.toUpperCase(),
         categoryId: txForm.categoryId,
         valor: valorParcela,
+        valorTotalCompra: i === 0 ? valorTotal : 0,
         parcelasTotal: numParcelas,
         parcelaAtual: i + 1,
         status: 'Pendente',
-        grupoId: numParcelas > 1 ? grupoId : undefined
+        grupoId: grupoId
       });
     }
+
     onUpdateCardTransactions([...newTxs, ...state.cardTransactions]);
-    setTxForm({ ...txForm, valor: '', descricao: '', parcelas: '1' });
+    setTxForm({ ...txForm, valorTotal: '', descricao: '', parcelas: '1' });
   };
 
-  const renderContent = () => {
-    switch (subTab) {
-      case 'cards':
-        return (
-          <div className="space-y-8 animate-in slide-in-from-right-4 duration-500">
-            <div className="flex justify-between items-center">
-              <h3 className="text-xl font-bold text-white uppercase tracking-widest italic" style={{ fontFamily: 'Book Antiqua' }}>Portfólio de Crédito</h3>
-              <button onClick={() => setShowAddCard(true)} className="luxury-button px-6 py-3 text-[10px] flex items-center gap-2"><Plus size={14} /> NOVO CARTÃO</button>
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-              {state.creditCards.map(card => (
-                <div key={card.id} className="luxury-card p-8 group hover:border-[#D4AF37] transition-all cursor-pointer" onClick={() => { setSelectedCardId(card.id); setSubTab('txs'); }}>
-                   <div className="flex justify-between items-start mb-10">
-                      <div className="w-16 h-12 bg-slate-900 rounded-xl border border-[#262626] flex items-center justify-center text-[#D4AF37] shadow-xl"><CardIcon size={24} /></div>
-                      <div className="text-right">
-                        <p className="text-[10px] font-black text-[#D4AF37] uppercase tracking-widest">{card.bandeira}</p>
-                        <p className="text-[8px] font-bold text-slate-500 mt-1 uppercase tracking-tighter">FECHAMENTO DIA {card.diaFechamento}</p>
-                      </div>
-                   </div>
-                   <h4 className="text-lg font-bold text-white uppercase italic mb-6">{card.nome}</h4>
-                   <div className="border-t border-[#262626] pt-6 flex justify-between items-end">
-                      <div>
-                        <p className="text-[8px] font-bold text-slate-500 uppercase mb-1">Status Fatura</p>
-                        <p className={`text-[9px] font-black uppercase tracking-widest ${invoiceSummary.status === 'Paga' ? 'text-emerald-500' : 'text-amber-500 animate-pulse'}`}>{invoiceSummary.status}</p>
-                      </div>
-                      <div className="text-right">
-                        <p className="text-[8px] font-bold text-slate-500 uppercase mb-1">Total Aberto</p>
-                        <p className="text-sm font-black text-[#D4AF37] italic">
-                          {isConfidential ? 'R$ ••••••' : new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(invoiceSummary.total)}
-                        </p>
-                      </div>
-                   </div>
-                </div>
-              ))}
-            </div>
+  const handleAddCard = (e: React.FormEvent) => {
+    e.preventDefault();
+    const form = e.target as HTMLFormElement;
+    const formData = new FormData(form);
+    
+    const newCard: CreditCardType = {
+      id: 'card-' + Date.now(),
+      nome: String(formData.get('nome')).toUpperCase(),
+      bandeira: formData.get('bandeira') as any,
+      entidadeId: String(formData.get('entidadeId')),
+      instituicaoDebitoId: String(formData.get('bancoId')),
+      diaFechamento: Number(formData.get('fechamento')),
+      diaVencimento: Number(formData.get('vencimento')),
+      limite: Number(formData.get('limite')) || 0
+    };
 
-            {showAddCard && (
-              <div className="fixed inset-0 z-[100] bg-black/80 backdrop-blur-sm flex items-center justify-center p-6">
-                <div className="luxury-card w-full max-w-2xl p-12 relative animate-in zoom-in-95">
-                  <h3 className="text-2xl font-bold text-[#D4AF37] uppercase italic tracking-widest mb-10">Habilitar Novo Plástico</h3>
-                  <form onSubmit={handleAddCard} className="grid grid-cols-2 gap-8">
-                    <div className="col-span-2 space-y-2">
-                      <label className="label-text">Nome do Cartão</label>
-                      <input required type="text" className="w-full p-4" placeholder="Ex: Master Black Unlimited" value={cardForm.nome} onChange={e => setCardForm({...cardForm, nome: e.target.value})} />
-                    </div>
-                    <div className="space-y-2">
-                      <label className="label-text">Titularidade</label>
-                      <select required className="w-full p-4" value={cardForm.entidadeId} onChange={e => setCardForm({...cardForm, entidadeId: e.target.value})}>
-                        <option value="">Selecione...</option>
-                        {state.entities.map(e => <option key={e.id} value={e.id}>{e.nome}</option>)}
-                      </select>
-                    </div>
-                    <div className="space-y-2">
-                      <label className="label-text">Banco de Débito</label>
-                      <select required className="w-full p-4" value={cardForm.instituicaoDebitoId} onChange={e => setCardForm({...cardForm, instituicaoDebitoId: e.target.value})}>
-                        <option value="">Selecione...</option>
-                        {state.instituicoes.filter(i => i.tipo === 'Banco').map(i => <option key={i.id} value={i.id}>{i.nome}</option>)}
-                      </select>
-                    </div>
-                    <div className="col-span-2 pt-6 flex gap-4">
-                      <button type="button" onClick={() => setShowAddCard(false)} className="flex-1 p-4 text-[10px] font-black uppercase text-slate-500">Cancelar</button>
-                      <button type="submit" className="flex-[2] luxury-button py-5">ADICIONAR CARTÃO</button>
-                    </div>
-                  </form>
-                </div>
-              </div>
-            )}
-          </div>
-        );
-
-      case 'txs':
-        return (
-          <div className="space-y-10 animate-in slide-in-from-right-4 duration-500">
-            <div className="luxury-card p-10 bg-[#0A0A0A]">
-              <h4 className="text-[11px] font-black text-[#D4AF37] uppercase tracking-[0.4em] mb-10 border-b border-[#262626] pb-4">Lançamento Manual em Cartão</h4>
-              <form onSubmit={handleAddTx} className="grid grid-cols-1 md:grid-cols-6 gap-6">
-                <div className="space-y-2">
-                  <label className="label-text">Data da Compra</label>
-                  <input required type="date" className="w-full p-4 text-xs font-bold" value={txForm.data} onChange={e => setTxForm({...txForm, data: e.target.value})} />
-                </div>
-                <div className="md:col-span-2 space-y-2">
-                  <label className="label-text">Descrição</label>
-                  <input required type="text" className="w-full p-4 text-xs font-bold uppercase" placeholder="EX: AMAZON BRASIL" value={txForm.descricao} onChange={e => setTxForm({...txForm, descricao: e.target.value})} />
-                </div>
-                <div className="space-y-2">
-                  <label className="label-text">Valor</label>
-                  <input required type="number" step="0.01" className="w-full p-4 text-sm font-black" placeholder="0,00" value={txForm.valor} onChange={e => setTxForm({...txForm, valor: e.target.value})} />
-                </div>
-                <div className="space-y-2">
-                  <label className="label-text">Parcelamento</label>
-                  <select className="w-full p-4 text-xs" value={txForm.parcelas} onChange={e => setTxForm({...txForm, parcelas: e.target.value})}>
-                    {[1,2,3,4,5,6,10,12].map(n => <option key={n} value={n}>{n === 1 ? 'À Vista' : `${n}x`}</option>)}
-                  </select>
-                </div>
-                <div className="space-y-2">
-                  <label className="label-text">Categoria</label>
-                  <select required className="w-full p-4 text-xs font-bold" value={txForm.categoryId} onChange={e => setTxForm({...txForm, categoryId: e.target.value})}>
-                    <option value="">Selecione...</option>
-                    {state.categories.map(c => <option key={c.id} value={c.id}>{c.nome}</option>)}
-                  </select>
-                </div>
-                <div className="md:col-span-6 flex justify-end pt-4">
-                   <button type="submit" className="luxury-button px-16 py-4 flex items-center gap-3">CONFIRMAR COMPRA <ArrowRight size={14} /></button>
-                </div>
-              </form>
-            </div>
-
-            <div className="luxury-card overflow-hidden">
-               <div className="p-8 border-b border-[#262626] flex justify-between items-center bg-[#111111]/50">
-                  <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Extrato de Crédito - {currentCard?.nome}</h4>
-               </div>
-               <table className="w-full text-left">
-                  <thead>
-                    <tr className="text-[10px] font-black uppercase text-slate-500 bg-[#0F0F0F] border-b border-[#262626]">
-                      <th className="px-8 py-5">Data</th>
-                      <th className="px-8 py-5">Estabelecimento</th>
-                      <th className="px-8 py-5">Categoria</th>
-                      <th className="px-8 py-5 text-center">Parcela</th>
-                      <th className="px-8 py-5 text-right">Valor</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-[#262626] text-xs">
-                    {state.cardTransactions
-                      .filter(t => t.cardId === selectedCardId)
-                      .sort((a,b) => b.dataCompra.localeCompare(a.dataCompra))
-                      .map(tx => (
-                        <tr key={tx.id} className="hover:bg-white/[0.02] transition-colors group">
-                           <td className="px-8 py-4 text-slate-500 font-bold">{new Date(tx.dataCompra).toLocaleDateString('pt-BR')}</td>
-                           <td className="px-8 py-4 font-bold text-white uppercase italic tracking-tight">{tx.descricao}</td>
-                           <td className="px-8 py-4">
-                             <span className="text-[10px] font-black text-[#D4AF37] uppercase italic">{state.categories.find(c => c.id === tx.categoryId)?.nome}</span>
-                           </td>
-                           <td className="px-8 py-4 text-center">
-                             <span className="bg-white/[0.03] border border-white/5 px-3 py-1 rounded text-[9px] font-black text-slate-400">
-                               {tx.parcelasTotal > 1 ? `${tx.parcelaAtual}/${tx.parcelasTotal}` : 'À VISTA'}
-                             </span>
-                           </td>
-                           <td className={`px-8 py-4 text-right font-black ${isConfidential ? 'sigilo-blur' : 'text-red-500'}`}>
-                             {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(tx.valor)}
-                           </td>
-                        </tr>
-                      ))
-                    }
-                  </tbody>
-               </table>
-            </div>
-          </div>
-        );
-
-      case 'import':
-        return (
-          <div className="space-y-8 animate-in fade-in duration-500">
-            {importStep === 1 && (
-              <div className="bg-[#0A0A0A] p-20 rounded-[3rem] border border-[#262626] text-center space-y-10">
-                <div className="w-24 h-24 bg-[#D4AF37]/10 text-[#D4AF37] rounded-full flex items-center justify-center mx-auto border border-[#D4AF37]/20 shadow-2xl">
-                  <Upload size={40} />
-                </div>
-                <div className="max-w-xl mx-auto space-y-4">
-                  <h3 className="text-3xl font-black italic uppercase text-white" style={{ fontFamily: 'Book Antiqua' }}>Conciliador de Faturas</h3>
-                  <p className="text-sm text-slate-500 leading-relaxed">Carregue o arquivo CSV do seu banco para processar os débitos do cartão <b>{currentCard?.nome}</b>. O sistema identificará compras duplicadas automaticamente.</p>
-                </div>
-                <div 
-                  onClick={() => fileInputRef.current?.click()}
-                  className="border-2 border-dashed border-[#262626] rounded-[2rem] p-20 hover:border-[#D4AF37] transition-all cursor-pointer group"
-                >
-                  <p className="text-[10px] font-black text-slate-600 uppercase tracking-widest group-hover:text-[#D4AF37]">Clique aqui para selecionar o CSV de Fatura</p>
-                  <input type="file" ref={fileInputRef} className="hidden" accept=".csv" onChange={handleFileUpload} />
-                </div>
-              </div>
-            )}
-
-            {importStep === 2 && (
-              <div className="luxury-card p-12 space-y-10">
-                <div className="flex items-center gap-4">
-                  <Database className="text-[#D4AF37]" />
-                  <h3 className="text-xl font-bold text-white uppercase italic tracking-widest">Mapear Colunas da Fatura</h3>
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-                  <div className="space-y-2">
-                    <label className="label-text">Coluna da Data</label>
-                    <select className="w-full p-4" value={mapping.data} onChange={e => setMapping({...mapping, data: e.target.value})}>
-                      <option value="">Selecione...</option>
-                      {csvHeaders.map(h => <option key={h} value={h}>{h}</option>)}
-                    </select>
-                  </div>
-                  <div className="space-y-2">
-                    <label className="label-text">Coluna do Valor</label>
-                    <select className="w-full p-4" value={mapping.valor} onChange={e => setMapping({...mapping, valor: e.target.value})}>
-                      <option value="">Selecione...</option>
-                      {csvHeaders.map(h => <option key={h} value={h}>{h}</option>)}
-                    </select>
-                  </div>
-                  <div className="space-y-2">
-                    <label className="label-text">Coluna da Descrição</label>
-                    <select className="w-full p-4" value={mapping.descricao} onChange={e => setMapping({...mapping, descricao: e.target.value})}>
-                      <option value="">Selecione...</option>
-                      {csvHeaders.map(h => <option key={h} value={h}>{h}</option>)}
-                    </select>
-                  </div>
-                </div>
-                <div className="flex justify-end gap-4 pt-10">
-                  <button onClick={() => setImportStep(1)} className="px-6 py-4 text-[10px] font-black text-slate-500 uppercase">Voltar</button>
-                  <button onClick={processImport} className="luxury-button px-10 py-4">Conciliar Fatura</button>
-                </div>
-              </div>
-            )}
-
-            {importStep === 3 && importPreview && (
-              <div className="space-y-8 animate-in slide-in-from-bottom-10">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                  <div className="luxury-card p-8 bg-emerald-500/5 border-emerald-500/20">
-                    <div className="flex justify-between items-start">
-                      <CheckCircle2 className="text-emerald-500" />
-                      <span className="text-2xl font-black text-white">{importPreview.new.length}</span>
-                    </div>
-                    <p className="label-text mt-4">Novos Lançamentos Identificados</p>
-                  </div>
-                  <div className="luxury-card p-8 bg-blue-500/5 border-blue-500/20">
-                    <div className="flex justify-between items-start">
-                      <RefreshCw className="text-blue-500" />
-                      <span className="text-2xl font-black text-white">{importPreview.reconciled}</span>
-                    </div>
-                    <p className="label-text mt-4">Itens já Conciliados (Duplicados)</p>
-                  </div>
-                </div>
-
-                <div className="luxury-card overflow-hidden">
-                  <table className="w-full text-left">
-                    <thead className="bg-[#111111]">
-                      <tr className="text-[10px] font-black uppercase text-slate-500 tracking-widest border-b border-[#262626]">
-                        <th className="px-8 py-5">Data</th>
-                        <th className="px-8 py-5">Descrição Importada</th>
-                        <th className="px-8 py-5 text-right">Valor</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-white/5 text-xs">
-                      {importPreview.new.map((tx, i) => (
-                        <tr key={i} className="hover:bg-white/[0.02]">
-                          <td className="px-8 py-4 text-slate-500">{tx.dataCompra}</td>
-                          <td className="px-8 py-4 text-white font-bold">{tx.descricao}</td>
-                          <td className="px-8 py-4 text-right text-emerald-500 font-black">
-                            {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(tx.valor)}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-
-                <div className="flex justify-end gap-6">
-                  <button onClick={() => setImportStep(2)} className="text-[10px] font-black uppercase text-slate-500">Cancelar</button>
-                  <button onClick={finalizeImport} className="luxury-button px-16 py-5 shadow-2xl">Confirmar Importação no Ledger</button>
-                </div>
-              </div>
-            )}
-
-            {importStep === 4 && (
-              <div className="bg-[#0A0A0A] p-20 rounded-[3rem] border border-[#262626] text-center space-y-10 animate-in zoom-in-95">
-                <CheckCircle2 size={64} className="text-emerald-500 mx-auto" />
-                <h3 className="text-3xl font-black italic uppercase text-white" style={{ fontFamily: 'Book Antiqua' }}>Importação Finalizada</h3>
-                <p className="text-sm text-slate-500">A fatura foi processada e os novos itens foram integrados ao seu controle patrimonial.</p>
-                <button onClick={() => { setImportStep(1); setSubTab('txs'); }} className="luxury-button px-16 py-5">Ver Lançamentos</button>
-              </div>
-            )}
-          </div>
-        );
-    }
+    onUpdateCards([...state.creditCards, newCard]);
+    setSelectedCardId(newCard.id);
+    setShowAddCard(false);
   };
 
   return (
-    <div className="space-y-10">
-      <div className="flex justify-between items-center bg-[#111111] p-2 rounded-2xl border border-[#262626] shadow-2xl">
-        <div className="flex gap-2">
-          <button onClick={() => setSubTab('cards')} className={`px-8 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${subTab === 'cards' ? 'bg-[#D4AF37] text-black' : 'text-slate-600 hover:text-slate-300'}`}>Plásticos</button>
-          <button onClick={() => setSubTab('txs')} className={`px-8 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${subTab === 'txs' ? 'bg-[#D4AF37] text-black' : 'text-slate-600 hover:text-slate-300'}`}>Timeline</button>
-          <button onClick={() => setSubTab('import')} className={`px-8 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${subTab === 'import' ? 'bg-[#D4AF37] text-black' : 'text-slate-600 hover:text-slate-300'}`}>Conciliar CSV</button>
+    <div className="space-y-10 font-sans">
+      {/* Header e Seleção de Cartão */}
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6 bg-[#111111] p-6 rounded-3xl border border-[#262626] shadow-2xl">
+        <div className="flex gap-1 bg-black/40 p-1.5 rounded-2xl border border-[#262626]">
+          <TabBtn active={activeTab === 'cards'} onClick={() => setActiveTab('cards')} label="Meus Plásticos" icon={<CardIcon size={14} />} />
+          <TabBtn active={activeTab === 'txs'} onClick={() => setActiveTab('txs')} label="Timeline" icon={<History size={14} />} />
+          <TabBtn active={activeTab === 'future'} onClick={() => setActiveTab('future')} label="Compromissos" icon={<TrendingDown size={14} />} />
+          <TabBtn active={activeTab === 'recon'} onClick={() => setActiveTab('recon')} label="Conciliação" icon={<Calculator size={14} />} />
         </div>
-        <div className="px-8 flex items-center gap-4">
-           <p className="text-[8px] font-black text-slate-500 uppercase tracking-widest">Cartão em Foco:</p>
-           <select className="bg-transparent border-none text-[10px] font-black text-[#D4AF37] uppercase tracking-[0.2em] outline-none cursor-pointer" value={selectedCardId} onChange={e => setSelectedCardId(e.target.value)}>
+        
+        <div className="flex items-center gap-4">
+           <select 
+              className="bg-black border border-[#D4AF37]/30 text-[11px] font-black text-[#D4AF37] uppercase tracking-widest p-3 rounded-xl outline-none min-w-[200px]" 
+              value={selectedCardId} 
+              onChange={e => setSelectedCardId(e.target.value)}
+           >
+             {state.creditCards.length === 0 && <option>Nenhum Cartão</option>}
              {state.creditCards.map(c => <option key={c.id} value={c.id}>{c.nome}</option>)}
            </select>
+           <button onClick={() => setShowAddCard(true)} className="p-3 bg-[#D4AF37] text-black rounded-xl hover:scale-105 transition-all"><Plus size={18} /></button>
         </div>
       </div>
 
-      {renderContent()}
+      {/* RENDERIZAÇÃO DAS ABAS */}
+      <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
+        {(() => {
+          switch (activeTab) {
+            case 'cards':
+              return (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+                  {state.creditCards.map(card => (
+                    <div key={card.id} className={`luxury-card p-10 relative overflow-hidden group border-l-4 ${selectedCardId === card.id ? 'border-[#D4AF37]' : 'border-transparent'}`} onClick={() => setSelectedCardId(card.id)}>
+                      <div className="flex justify-between items-start mb-12">
+                        <div className="p-4 bg-black rounded-xl border border-[#262626] text-[#D4AF37]"><CardIcon size={24} /></div>
+                        <div className="text-right">
+                          <p className="text-[10px] font-black text-[#D4AF37] uppercase tracking-widest">{card.bandeira}</p>
+                          <p className="text-[8px] font-bold text-slate-500 mt-2 uppercase">Vence dia {card.diaVencimento}</p>
+                        </div>
+                      </div>
+                      <h4 className="text-xl font-bold text-white uppercase font-serif-luxury tracking-widest mb-10">{card.nome}</h4>
+                      <div className="grid grid-cols-2 gap-6 border-t border-[#262626] pt-8">
+                        <div>
+                          <p className="label-text mb-2">Utilizado</p>
+                          <p className="text-lg font-bold text-white font-serif-luxury">{formatCurrency(state.cardTransactions.filter(t => t.cardId === card.id && t.status !== 'Pago').reduce((acc, t) => acc + t.valor, 0))}</p>
+                        </div>
+                        <div className="text-right">
+                          <p className="label-text mb-2">Limite Total</p>
+                          <p className="text-lg font-bold text-[#D4AF37] font-serif-luxury">{formatCurrency(card.limite || 0)}</p>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                  <button onClick={() => setShowAddCard(true)} className="luxury-card p-10 border-dashed border-2 border-slate-800 flex flex-col items-center justify-center gap-4 group hover:border-[#D4AF37] transition-all">
+                    <Plus className="text-slate-700 group-hover:text-[#D4AF37]" size={32} />
+                    <span className="text-[10px] font-black uppercase text-slate-500 tracking-[0.3em]">Habilitar Novo Plástico</span>
+                  </button>
+                </div>
+              );
+
+            case 'txs':
+              return (
+                <div className="space-y-10">
+                  <div className="luxury-card p-10 bg-[#0F0F0F] border-[#D4AF37]/20">
+                    <h4 className="text-[11px] font-black text-[#D4AF37] uppercase tracking-[0.4em] mb-10 flex items-center gap-3"><Plus size={16} /> Novo Lançamento de Compra</h4>
+                    <form onSubmit={handleAddTx} className="grid grid-cols-1 md:grid-cols-5 gap-8">
+                      <div className="space-y-2">
+                        <label className="label-text">Data</label>
+                        <input required type="date" className="w-full p-4 font-bold" value={txForm.data} onChange={e => setTxForm({...txForm, data: e.target.value})} />
+                      </div>
+                      <div className="md:col-span-2 space-y-2">
+                        <label className="label-text">Estabelecimento</label>
+                        <input required type="text" className="w-full p-4 font-bold uppercase" placeholder="EX: AMAZON BRASIL" value={txForm.descricao} onChange={e => setTxForm({...txForm, descricao: e.target.value})} />
+                      </div>
+                      <div className="space-y-2">
+                        <label className="label-text">Valor Total</label>
+                        <input required type="number" step="0.01" className="w-full p-4 font-bold" placeholder="0,00" value={txForm.valorTotal} onChange={e => setTxForm({...txForm, valorTotal: e.target.value})} />
+                      </div>
+                      <div className="space-y-2">
+                        <label className="label-text">Parcelas</label>
+                        <select className="w-full p-4 font-bold" value={txForm.parcelas} onChange={e => setTxForm({...txForm, parcelas: e.target.value})}>
+                          {[1,2,3,4,5,6,10,12,18,24].map(n => <option key={n} value={n}>{n === 1 ? 'À Vista' : `${n}x Parcelas`}</option>)}
+                        </select>
+                      </div>
+                      <div className="md:col-span-4 space-y-2">
+                        <label className="label-text">Categoria DRE</label>
+                        <select required className="w-full p-4 font-bold" value={txForm.categoryId} onChange={e => setTxForm({...txForm, categoryId: e.target.value})}>
+                          <option value="">Selecione...</option>
+                          {state.categories.map(c => <option key={c.id} value={c.id}>{c.nome}</option>)}
+                        </select>
+                      </div>
+                      <div className="flex items-end">
+                        <button type="submit" className="luxury-button w-full py-4 text-[10px] flex items-center justify-center gap-3">REGISTRAR COMPRA <ArrowRight size={14} /></button>
+                      </div>
+                    </form>
+                  </div>
+
+                  <div className="luxury-card overflow-hidden">
+                    <table className="w-full text-left">
+                      <thead>
+                        <tr className="bg-[#111111] text-[10px] font-black uppercase text-slate-500 tracking-widest border-b border-[#262626]">
+                          <th className="px-10 py-6">Data</th>
+                          <th className="px-10 py-6">Estabelecimento</th>
+                          <th className="px-10 py-6">Categoria</th>
+                          <th className="px-10 py-6 text-center">Parcela</th>
+                          <th className="px-10 py-6 text-right">Valor</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-white/5">
+                        {state.cardTransactions
+                          .filter(t => t.cardId === selectedCardId)
+                          .sort((a,b) => b.dataCompra.localeCompare(a.dataCompra))
+                          .map(tx => (
+                            <tr key={tx.id} className="hover:bg-white/[0.02] transition-colors">
+                              <td className="px-10 py-5 text-slate-500 font-bold text-xs">{new Date(tx.dataCompra).toLocaleDateString('pt-BR')}</td>
+                              <td className="px-10 py-5 font-bold text-white uppercase">{tx.descricao}</td>
+                              <td className="px-10 py-5"><span className="text-[10px] font-black text-[#D4AF37] uppercase">{state.categories.find(c => c.id === tx.categoryId)?.nome}</span></td>
+                              <td className="px-10 py-5 text-center"><span className="text-[10px] bg-black border border-white/10 px-3 py-1 rounded-full">{tx.parcelasTotal > 1 ? `${tx.parcelaAtual}/${tx.parcelasTotal}` : 'À Vista'}</span></td>
+                              <td className="px-10 py-5 text-right font-black font-serif-luxury">{formatCurrency(tx.valor)}</td>
+                            </tr>
+                          ))
+                        }
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              );
+
+            case 'future':
+              return (
+                <div className="space-y-10">
+                   <div className="grid grid-cols-1 md:grid-cols-4 gap-8">
+                      <div className="luxury-card p-8 border-l-4 border-[#D4AF37]">
+                        <p className="label-text mb-3">Saldo Devedor Projetado</p>
+                        <h3 className="text-2xl font-bold font-serif-luxury">{formatCurrency(state.cardTransactions.filter(t => t.cardId === selectedCardId && t.status !== 'Pago').reduce((acc, t) => acc + t.valor, 0))}</h3>
+                      </div>
+                   </div>
+                   <div className="luxury-card overflow-hidden">
+                      <table className="w-full text-left">
+                        <thead>
+                          <tr className="bg-[#111111] text-[10px] font-black uppercase text-slate-500 tracking-widest border-b border-[#262626]">
+                            <th className="px-10 py-6">Mês de Referência</th>
+                            <th className="px-10 py-6 text-center">Qtd. Itens</th>
+                            <th className="px-10 py-6">Status Provisório</th>
+                            <th className="px-10 py-6 text-right">Total Fatura</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-white/5">
+                          {invoices.map(inv => (
+                            <tr key={inv.month} className="hover:bg-white/[0.02]">
+                              <td className="px-10 py-6 text-sm font-bold text-white uppercase">{inv.month}</td>
+                              <td className="px-10 py-6 text-center text-slate-500 font-bold">{inv.items.length} Parcelas</td>
+                              <td className="px-10 py-6">
+                                <span className={`px-4 py-1.5 rounded-full text-[9px] font-black uppercase tracking-widest ${inv.status === 'Paga' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-[#D4AF37]/10 text-[#D4AF37]'}`}>
+                                  {inv.status}
+                                </span>
+                              </td>
+                              <td className="px-10 py-6 text-right font-black text-lg font-serif-luxury">{formatCurrency(inv.total)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                   </div>
+                </div>
+              );
+
+            case 'recon':
+              return (
+                <div className="space-y-10">
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-10">
+                    <div className="luxury-card p-10">
+                      <h4 className="text-[11px] font-black text-[#D4AF37] uppercase tracking-[0.4em] mb-10">1. Selecione a Fatura em Aberto</h4>
+                      <div className="space-y-4">
+                        {invoices.filter(i => i.status === 'Aberta').map(inv => (
+                          <div key={inv.month} className="flex justify-between items-center p-6 bg-black/40 border border-[#262626] rounded-2xl">
+                             <div>
+                               <p className="text-[10px] font-black text-slate-500 uppercase">Mês {inv.month}</p>
+                               <p className="text-lg font-bold font-serif-luxury">{formatCurrency(inv.total)}</p>
+                             </div>
+                             <div className="flex gap-2">
+                               {bankPayments.length > 0 ? (
+                                 <button onClick={() => handleConciliate(inv.month, 'manual')} className="px-6 py-3 bg-[#D4AF37] text-black rounded-xl text-[9px] font-black uppercase tracking-widest">Vincular Pagamento</button>
+                               ) : (
+                                 <p className="text-[9px] font-bold text-red-500 uppercase">Pagamento não localizado no banco</p>
+                               )}
+                             </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="luxury-card p-10">
+                      <h4 className="text-[11px] font-black text-blue-400 uppercase tracking-[0.4em] mb-10">2. Pagamentos Localizados no Extrato</h4>
+                      <div className="space-y-4">
+                        {bankPayments.length === 0 && <p className="text-slate-600 italic">Nenhum lançamento 'Pagamento de Fatura' encontrado no extrato bancário.</p>}
+                        {bankPayments.map(p => (
+                          <div key={p.id} className="p-6 bg-black/40 border border-blue-500/20 rounded-2xl flex justify-between items-center">
+                            <div>
+                               <p className="text-[10px] font-black text-blue-400 uppercase">{p.data}</p>
+                               <p className="text-sm font-bold text-white uppercase">{p.detalhes}</p>
+                            </div>
+                            <p className="font-black text-red-500">{formatCurrency(p.valor)}</p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+          }
+        })()}
+      </div>
+
+      {/* Modal de Cadastro de Cartão */}
+      {showAddCard && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/90 backdrop-blur-md p-6">
+           <form onSubmit={handleAddCard} className="luxury-card w-full max-w-2xl p-12 relative animate-in zoom-in-95 duration-300">
+              <h3 className="text-2xl font-bold text-[#D4AF37] uppercase tracking-widest font-serif-luxury mb-12 border-b border-[#262626] pb-6">Novo Meio de Pagamento (Crédito)</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                 <div className="space-y-2 col-span-2">
+                    <label className="label-text">Nome do Cartão</label>
+                    <input name="nome" required className="w-full p-4 font-bold text-sm" placeholder="Ex: VISA INFINITE - BTG" />
+                 </div>
+                 <div className="space-y-2">
+                    <label className="label-text">Bandeira</label>
+                    <select name="bandeira" className="w-full p-4 font-bold">
+                       <option value="Visa">Visa</option>
+                       <option value="Master">Mastercard</option>
+                       <option value="Amex">Amex</option>
+                       <option value="Elo">Elo</option>
+                    </select>
+                 </div>
+                 <div className="space-y-2">
+                    <label className="label-text">Titularidade</label>
+                    <select name="entidadeId" className="w-full p-4 font-bold">
+                       {state.entities.map(e => <option key={e.id} value={e.id}>{e.nome}</option>)}
+                    </select>
+                 </div>
+                 <div className="space-y-2">
+                    <label className="label-text">Banco de Débito</label>
+                    <select name="bancoId" className="w-full p-4 font-bold">
+                       {state.instituicoes.filter(i => i.tipo === 'Banco').map(i => <option key={i.id} value={i.id}>{i.nome}</option>)}
+                    </select>
+                 </div>
+                 <div className="space-y-2">
+                    <label className="label-text">Limite de Crédito</label>
+                    <input name="limite" type="number" className="w-full p-4 font-bold" placeholder="0,00" />
+                 </div>
+                 <div className="space-y-2">
+                    <label className="label-text">Dia Fechamento</label>
+                    <input name="fechamento" type="number" className="w-full p-4 font-bold" placeholder="Dia" min="1" max="31" />
+                 </div>
+                 <div className="space-y-2">
+                    <label className="label-text">Dia Vencimento</label>
+                    <input name="vencimento" type="number" className="w-full p-4 font-bold" placeholder="Dia" min="1" max="31" />
+                 </div>
+              </div>
+              <div className="mt-12 flex gap-4">
+                 <button type="button" onClick={() => setShowAddCard(false)} className="flex-1 p-4 text-[10px] font-black text-slate-500 uppercase tracking-widest">Descartar</button>
+                 <button type="submit" className="flex-[2] luxury-button py-4">EFETIVAR CADASTRO</button>
+              </div>
+           </form>
+        </div>
+      )}
     </div>
   );
 };
+
+const TabBtn = ({ active, onClick, label, icon }: any) => (
+  <button 
+    onClick={onClick} 
+    className={`flex items-center gap-3 px-8 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${active ? 'bg-[#D4AF37] text-black shadow-lg' : 'text-slate-500 hover:text-slate-300'}`}
+  >
+    {icon} {label}
+  </button>
+);
 
 export default CreditCardView;
