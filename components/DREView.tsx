@@ -1,28 +1,12 @@
 
 import React, { useMemo, useState, useEffect } from 'react';
-import { Transaction, Category, DRE_GROUPS, AppState, AssetSnapshot, CardTransaction } from '../types';
-import { 
-  ChevronDown, 
-  Zap, 
-  DollarSign, 
-  BarChart3, 
-  Clock, 
-  Calendar, 
-  ArrowUpRight, 
-  ArrowDownRight,
-  Target,
-  TrendingUp,
-  History,
-  Search,
-  ExternalLink,
-  AlertCircle
-} from 'lucide-react';
+import { AppState, Transaction, Category, DRE_GROUPS } from '../types';
+import { Eye, EyeOff, Target, TrendingUp, History, Calendar, BarChart3 } from 'lucide-react';
 
 interface DREViewProps {
   state: AppState;
   transactions: Transaction[];
   categories: Category[];
-  snapshots: AssetSnapshot[];
   selectedMonth: number;
   selectedYear: number;
   isConfidential: boolean;
@@ -30,25 +14,8 @@ interface DREViewProps {
 
 type TemporalView = 'mensal' | 'trimestral' | 'semestral' | 'anual' | 'comparativo';
 
-interface AuditDetail {
-  id: string;
-  data: string;
-  descricao: string;
-  valor: number;
-  instituicao: string;
-}
-
-interface CategoryDetail {
-  total: number;
-  txs: AuditDetail[];
-}
-
-interface GroupDetail {
-  total: number;
-  categories: Record<string, CategoryDetail>;
-}
-
-const DREView: React.FC<DREViewProps> = ({ state, transactions, categories, snapshots, selectedMonth, selectedYear, isConfidential }) => {
+const DREView: React.FC<DREViewProps> = ({ state, transactions, categories, selectedMonth, selectedYear, isConfidential }) => {
+  const [showEmptyAccounts, setShowEmptyAccounts] = useState(false);
   const [viewMode, setViewMode] = useState<'competencia' | 'caixa'>('competencia');
   const [temporalView, setTemporalView] = useState<TemporalView>(() => {
     return (localStorage.getItem('dre_temporal_view') as TemporalView) || 'mensal';
@@ -58,273 +25,269 @@ const DREView: React.FC<DREViewProps> = ({ state, transactions, categories, snap
     localStorage.setItem('dre_temporal_view', temporalView);
   }, [temporalView]);
 
+  const monthsLabels = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
+
   const formatCurrency = (value: number) => {
     const formatted = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value);
     return isConfidential ? 'R$ ••••••••' : formatted;
   };
 
-  // --- VALIDAÇÃO DE INTEGRIDADE (ÓRFÃOS) ---
-  const unclassifiedCount = useMemo(() => {
-    const bankOrphans = transactions.filter(tx => tx.impactaDRE && (!tx.referencia || !categories.some(c => c.id === tx.referencia))).length;
-    const cardOrphans = state.cardTransactions.filter(ctx => !ctx.categoryId || !categories.some(c => c.id === ctx.categoryId)).length;
-    return bankOrphans + cardOrphans;
-  }, [transactions, state.cardTransactions, categories]);
+  const periods = useMemo(() => {
+    if (temporalView === 'mensal') return [selectedMonth];
+    if (temporalView === 'trimestral') {
+      const q = Math.floor(selectedMonth / 3);
+      return [q * 3, q * 3 + 1, q * 3 + 2];
+    }
+    if (temporalView === 'semestral') {
+      const s = Math.floor(selectedMonth / 6);
+      return Array.from({ length: 6 }, (_, i) => s * 6 + i);
+    }
+    if (temporalView === 'anual' || temporalView === 'comparativo') {
+      return Array.from({ length: 12 }, (_, i) => i);
+    }
+    return [selectedMonth];
+  }, [temporalView, selectedMonth]);
 
-  const getDREDataForPeriod = (year: number, month: number, view: TemporalView) => {
-    const groups: Record<string, GroupDetail> = {};
-    DRE_GROUPS.forEach(g => {
-      groups[g] = { total: 0, categories: {} };
+  const dreData = useMemo(() => {
+    const balances: Record<string, Record<number, number>> = {};
+    
+    categories.forEach(c => {
+      balances[c.id] = {};
+      for (let i = 0; i < 12; i++) balances[c.id][i] = 0;
     });
 
-    const isInPeriod = (dateStr: string) => {
-      if (!dateStr) return false;
-      const d = new Date(dateStr);
-      const dYear = d.getFullYear();
-      const dMonth = d.getMonth();
-
-      if (view === 'mensal') return dYear === year && dMonth === month;
-      if (view === 'anual' || view === 'comparativo') return dYear === year;
-      if (view === 'trimestral') {
-        const startMonth = Math.max(0, month - 2);
-        return dYear === year && dMonth >= startMonth && dMonth <= month;
+    const processTx = (tx: Transaction | any, isCard: boolean = false) => {
+      const date = viewMode === 'caixa' ? new Date(tx.dataCaixa || tx.data) : new Date(tx.dataCompetencia || tx.data);
+      if (date.getFullYear() === selectedYear) {
+        const m = date.getMonth();
+        const catId = isCard ? tx.categoryId : tx.referencia;
+        if (balances[catId]) {
+          if (isCard) {
+            balances[catId][m] -= tx.valor;
+          } else {
+            balances[catId][m] += (tx.tipo === 'entrada' ? tx.valor : -tx.valor);
+          }
+        }
       }
-      if (view === 'semestral') {
-        const startMonth = Math.max(0, month - 5);
-        return dYear === year && dMonth >= startMonth && dMonth <= month;
-      }
-      return false;
     };
 
-    // Processamento de Transações Bancárias
-    transactions.forEach(tx => {
-      if (!tx.impactaDRE) return;
-      if (tx.tipoLancamento === 'PAGAMENTO_FATURA') return;
-      if (tx.tipoLancamento === 'TRANSFERENCIA_INTERNA') return;
+    transactions.forEach(tx => tx.impactaDRE && processTx(tx));
+    state.cardTransactions.forEach(ctx => processTx(ctx, true));
 
-      const dateToUse = viewMode === 'caixa' ? tx.dataCaixa : tx.dataCompetencia;
-      if (isInPeriod(dateToUse)) {
-        const cat = categories.find(c => c.id === tx.referencia);
-        if (cat && groups[cat.grupo]) {
-          const val = tx.tipo === 'entrada' ? tx.valor : -tx.valor;
-          const instName = state.instituicoes.find(i => i.id === tx.instituicaoId)?.nome || 'Banco';
-          
-          groups[cat.grupo].total += val;
-          if (!groups[cat.grupo].categories[cat.nome]) {
-            groups[cat.grupo].categories[cat.nome] = { total: 0, txs: [] };
-          }
-          groups[cat.grupo].categories[cat.nome].total += val;
-          groups[cat.grupo].categories[cat.nome].txs.push({
-            id: tx.id,
-            data: dateToUse,
-            descricao: tx.detalhes || 'S/ DESCRIÇÃO',
-            valor: val,
-            instituicao: instName
-          });
-        }
-      }
-    });
+    return balances;
+  }, [transactions, state.cardTransactions, categories, selectedYear, viewMode]);
 
-    // Lançamentos de Cartão
-    state.cardTransactions.forEach(ctx => {
-      const dateToUse = viewMode === 'competencia' ? ctx.dataCompra : ctx.dataVencimentoFatura;
-      if (isInPeriod(dateToUse)) {
-        const cat = categories.find(c => c.id === ctx.categoryId);
-        if (cat && groups[cat.grupo]) {
-          const val = -ctx.valor;
-          const cardName = state.creditCards.find(cc => cc.id === ctx.cardId)?.nome || 'Cartão';
-
-          groups[cat.grupo].total += val;
-          if (!groups[cat.grupo].categories[cat.nome]) {
-            groups[cat.grupo].categories[cat.nome] = { total: 0, txs: [] };
-          }
-          groups[cat.grupo].categories[cat.nome].total += val;
-          groups[cat.grupo].categories[cat.nome].txs.push({
-            id: ctx.id,
-            data: dateToUse,
-            descricao: `[Fatura] ${ctx.descricao}`,
-            valor: val,
-            instituicao: cardName
-          });
-        }
-      }
-    });
-
-    // Rendimentos de Investimento (Snapshots)
-    snapshots
-      .filter(s => {
-        if (view === 'mensal') return s.ano === year && s.mes === month;
-        if (view === 'anual' || view === 'comparativo') return s.ano === year;
-        if (view === 'trimestral') {
-          const startMonth = Math.max(0, month - 2);
-          return s.ano === year && s.mes >= startMonth && s.mes <= month;
-        }
-        if (view === 'semestral') {
-          const startMonth = Math.max(0, month - 5);
-          return s.ano === year && s.mes >= startMonth && s.mes <= month;
-        }
-        return false;
-      })
-      .forEach(s => {
-        const group = 'RECEITAS FINANCEIRAS / VARIAÇÃO';
-        const catName = 'RENDIMENTO DE CARTEIRA';
-        const assetName = state.assets.find(a => a.id === s.assetId)?.nome || 'Ativo';
-
-        groups[group].total += s.rendimento;
-        if (!groups[group].categories[catName]) {
-          groups[group].categories[catName] = { total: 0, txs: [] };
-        }
-        groups[group].categories[catName].total += s.rendimento;
-        groups[group].categories[catName].txs.push({
-          id: s.id,
-          data: `${s.ano}-${String(s.mes + 1).padStart(2, '0')}-01`,
-          descricao: `VARIAÇÃO: ${assetName}`,
-          valor: s.rendimento,
-          instituicao: 'Carteira Gestão'
-        });
-      });
-
-    const recOp = groups['RECEITAS OPERACIONAIS'].total;
-    const resOp = recOp + 
-                  groups['CUSTO DE VIDA SOBREVIVÊNCIA'].total + 
-                  groups['CUSTO DE VIDA CONFORTO'].total + 
-                  groups['DESPESAS PROFISSIONAIS'].total;
-
-    const resWealth = groups['MOVIMENTAÇÕES NÃO OPERACIONAIS'].total + 
-                      groups['RECEITAS FINANCEIRAS / VARIAÇÃO'].total + 
-                      groups['INVESTIMENTOS REALIZADOS'].total;
-
-    return { groups, recOp, resOp, resWealth, totalGlobal: resOp + resWealth };
+  const getCategoryTotal = (catId: string) => {
+    return periods.reduce((acc, m) => acc + (dreData[catId]?.[m] || 0), 0);
   };
 
-  const currentDRE = useMemo(() => getDREDataForPeriod(selectedYear, selectedMonth, temporalView), 
-    [selectedYear, selectedMonth, temporalView, transactions, state.cardTransactions, snapshots, viewMode, state.instituicoes, state.assets, categories]);
+  const getGroupTotal = (groupName: string) => {
+    return categories
+      .filter(c => c.grupo === groupName)
+      .reduce((acc, c) => acc + getCategoryTotal(c.id), 0);
+  };
 
-  const prevDRE = useMemo(() => {
-    if (temporalView === 'comparativo') return getDREDataForPeriod(selectedYear - 1, selectedMonth, 'anual');
-    return null;
-  }, [selectedYear, selectedMonth, temporalView, transactions, state.cardTransactions, snapshots, viewMode, state.instituicoes, state.assets, categories]);
+  // --- CÁLCULOS DE BI POR NÍVEL ---
+  const vReceitasOp = getGroupTotal('RECEITAS OPERACIONAIS');
+  const vSobrevivencia = getGroupTotal('CUSTO DE VIDA – SOBREVIVÊNCIA');
+  const vConforto = getGroupTotal('CUSTO DE VIDA – CONFORTO');
+  const lucroBrutoVida = vReceitasOp + vSobrevivencia + vConforto;
 
-  const OPERATIONAL_GROUPS = ['RECEITAS OPERACIONAIS', 'CUSTO DE VIDA SOBREVIVÊNCIA', 'CUSTO DE VIDA CONFORTO', 'DESPESAS PROFISSIONAIS'];
-  const WEALTH_GROUPS = ['MOVIMENTAÇÕES NÃO OPERACIONAIS', 'RECEITAS FINANCEIRAS / VARIAÇÃO', 'INVESTIMENTOS REALIZADOS'];
+  const vProfissionais = getGroupTotal('DESPESAS PROFISSIONAIS');
+  const vBensMateriais = getGroupTotal('BENS MATERIAIS');
+  const vLaser = getGroupTotal('LASER');
+  const vCarros = getGroupTotal('CARROS');
+  const lucroLiquidoOp = lucroBrutoVida + vProfissionais + vBensMateriais + vLaser + vCarros;
+
+  const vInvestimentos = getGroupTotal('INVESTIMENTOS');
+  const resultadoPeriodo = lucroLiquidoOp + vInvestimentos;
+
+  const vNaoOp = getGroupTotal('RECEITAS NÃO OPERACIONAIS');
+  const vFinanceiras = getGroupTotal('RECEITAS FINANCEIRAS');
+  const resultadoGlobal = resultadoPeriodo + vNaoOp + vFinanceiras;
+
+  const RenderAnalyticalRow = ({ category }: { category: Category }) => {
+    const totalValue = getCategoryTotal(category.id);
+    const hasValue = Math.abs(totalValue) > 0.01;
+
+    if (!showEmptyAccounts && !hasValue) return null;
+
+    return (
+      <tr className="group hover:bg-white/[0.04] transition-colors border-b border-white/5">
+        <td className="pl-16 pr-4 py-3">
+          <div className="flex items-center gap-2">
+            <span className={`text-[11px] font-bold uppercase tracking-widest font-serif-luxury ${totalValue === 0 ? 'text-slate-700' : 'text-[#F5F5F5]'}`}>
+              {category.nome}
+            </span>
+            <div className="flex-grow border-b border-dotted border-white/10 h-3 opacity-30"></div>
+          </div>
+        </td>
+        
+        {temporalView === 'comparativo' ? (
+          periods.map(m => {
+            const val = dreData[category.id]?.[m] || 0;
+            return (
+              <td key={m} className={`px-4 py-3 text-right text-[11px] font-bold font-serif-luxury ${val < 0 ? 'text-red-400' : val > 0 ? 'text-[#F5F5F5]' : 'text-slate-800'}`}>
+                {isConfidential ? '••••' : val.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </td>
+            );
+          })
+        ) : (
+          <td className={`px-10 py-3 text-right text-[11px] font-bold font-serif-luxury ${totalValue < 0 ? 'text-red-400' : totalValue > 0 ? 'text-[#F5F5F5]' : 'text-slate-700'}`}>
+            {formatCurrency(totalValue)}
+          </td>
+        )}
+      </tr>
+    );
+  };
+
+  const RenderSubGroup = ({ label, groupName, signal }: { label: string, groupName: string, signal: string }) => {
+    const total = getGroupTotal(groupName);
+    const relevantCats = categories.filter(c => c.grupo === groupName);
+    const hasMovement = relevantCats.some(c => Math.abs(getCategoryTotal(c.id)) > 0.01);
+
+    if (!showEmptyAccounts && !hasMovement) return null;
+
+    return (
+      <>
+        <tr className="bg-white/[0.01]">
+          <td className="px-10 py-5">
+            <span className="text-[12px] font-black text-[#D4AF37] uppercase tracking-[0.2em] font-serif-luxury">{signal} {label}</span>
+          </td>
+          {temporalView === 'comparativo' ? (
+            periods.map(m => {
+              const mTotal = relevantCats.reduce((acc, c) => acc + (dreData[c.id]?.[m] || 0), 0);
+              return <td key={m} className="px-4 py-5 text-right text-[11px] font-black text-white font-serif-luxury">{isConfidential ? '••••' : mTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
+            })
+          ) : (
+            <td className="px-10 py-5 text-right text-xs font-black text-white font-serif-luxury">{formatCurrency(total)}</td>
+          )}
+        </tr>
+        {relevantCats.map(cat => <RenderAnalyticalRow key={cat.id} category={cat} />)}
+      </>
+    );
+  };
+
+  const RenderTotalLine = ({ label, value, colorClass = "text-[#D4AF37]" }: { label: string, value: number, colorClass?: string }) => (
+    <tr className="bg-[#121212] border-y-2 border-[#262626]">
+      <td className="px-10 py-6 text-[12px] font-black text-white uppercase tracking-[0.2em] font-serif-luxury">{label}</td>
+      {temporalView === 'comparativo' ? (
+        periods.map(m => {
+          return <td key={m} className="px-4 py-6 text-right text-[11px] font-black">--</td>
+        })
+      ) : (
+        <td className={`px-10 py-6 text-right text-lg font-bold font-serif-luxury ${value < 0 ? 'text-red-500' : colorClass}`}>{formatCurrency(value)}</td>
+      )}
+    </tr>
+  );
 
   return (
-    <div className="space-y-10 animate-in fade-in duration-700 font-sans">
+    <div className="space-y-8 animate-in fade-in duration-700 font-sans">
       
-      {unclassifiedCount > 0 && (
-        <div className="bg-amber-500/10 border border-amber-500/20 p-6 rounded-2xl flex items-center gap-4 text-amber-500 shadow-xl animate-pulse">
-          <AlertCircle size={24} />
-          <div className="flex-1">
-            <h4 className="text-[10px] font-black uppercase tracking-widest">Atenção Gerencial: Dados Incompletos</h4>
-            <p className="text-xs font-bold mt-1">Existem {unclassifiedCount} lançamentos órfãos (sem conta gerencial). O resultado abaixo pode estar subestimado.</p>
+      <div className="flex flex-col gap-6">
+        <div className="flex justify-between items-center">
+          <div className="flex gap-1.5 p-1 bg-[#111111] rounded-2xl border border-[#262626] shadow-xl">
+            {(['mensal', 'trimestral', 'semestral', 'anual', 'comparativo'] as TemporalView[]).map(v => (
+              <button 
+                key={v} 
+                onClick={() => setTemporalView(v)} 
+                className={`px-6 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-[0.15em] transition-all ${temporalView === v ? 'bg-[#D4AF37] text-black shadow-[0_0_20px_rgba(212,175,55,0.4)]' : 'text-slate-500 hover:text-white'}`}
+              >
+                {v}
+              </button>
+            ))}
           </div>
-          <button onClick={() => window.location.hash = '#importar'} className="text-[9px] font-black uppercase tracking-widest bg-amber-500 text-black px-4 py-2 rounded-lg">Regularizar Agora</button>
-        </div>
-      )}
 
-      <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-6 bg-[#111111] p-6 rounded-3xl border border-[#262626]">
-        <div className="flex gap-1.5 p-1 bg-black rounded-2xl border border-[#262626]">
-          {(['mensal', 'trimestral', 'semestral', 'anual', 'comparativo'] as TemporalView[]).map(v => (
-            <button key={v} onClick={() => setTemporalView(v)} className={`px-6 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${temporalView === v ? 'bg-[#D4AF37] text-black shadow-lg shadow-[#D4AF37]/20' : 'text-slate-500 hover:text-white'}`}>
-              {v}
+          <div className="flex items-center gap-4">
+            <div className="flex bg-black p-1 rounded-xl border border-[#262626]">
+              <button onClick={() => setViewMode('caixa')} className={`px-5 py-2 rounded-lg text-[9px] font-black uppercase tracking-widest transition-all ${viewMode === 'caixa' ? 'bg-white text-black' : 'text-slate-500'}`}>Caixa</button>
+              <button onClick={() => setViewMode('competencia')} className={`px-5 py-2 rounded-lg text-[9px] font-black uppercase tracking-widest transition-all ${viewMode === 'competencia' ? 'bg-white text-black' : 'text-slate-500'}`}>Competência</button>
+            </div>
+            <button 
+              onClick={() => setShowEmptyAccounts(!showEmptyAccounts)}
+              className={`flex items-center gap-3 px-6 py-2.5 rounded-xl text-[9px] font-black uppercase tracking-widest transition-all border ${showEmptyAccounts ? 'bg-[#D4AF37]/20 border-[#D4AF37] text-[#D4AF37]' : 'border-[#262626] text-slate-500'}`}
+            >
+              {showEmptyAccounts ? <Eye size={14} /> : <EyeOff size={14} />}
+              {showEmptyAccounts ? 'OCULTAR VAZIAS' : 'EXIBIR TODOS'}
             </button>
-          ))}
-        </div>
-        <div className="flex bg-black p-1 rounded-xl border border-[#262626]">
-          <button onClick={() => setViewMode('caixa')} className={`px-5 py-2 rounded-lg text-[9px] font-black uppercase tracking-widest transition-all ${viewMode === 'caixa' ? 'bg-white text-black' : 'text-slate-500 hover:text-white'}`}>Caixa</button>
-          <button onClick={() => setViewMode('competencia')} className={`px-5 py-2 rounded-lg text-[9px] font-black uppercase tracking-widest transition-all ${viewMode === 'competencia' ? 'bg-white text-black' : 'text-slate-500 hover:text-white'}`}>Competência</button>
+          </div>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-        <KPIBox title="Lucro Operacional Líquido" value={formatCurrency(currentDRE.resOp)} icon={<Target size={20} />} highlight="gold" />
-        <KPIBox title="Resultados Patrimoniais (Wealth)" value={formatCurrency(currentDRE.resWealth)} icon={<TrendingUp size={20} />} highlight="blue" />
-        <KPIBox title="Lucro Global do Período" value={formatCurrency(currentDRE.totalGlobal)} icon={<History size={20} />} highlight="emerald" />
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <KPIBox title={`Lucro Operacional`} value={formatCurrency(lucroLiquidoOp)} icon={<Target size={20} />} highlight="gold" />
+        <KPIBox title={`Resultado Patrimonial`} value={formatCurrency(resultadoPeriodo)} icon={<TrendingUp size={20} />} highlight="blue" />
+        <KPIBox title={`Resultado Global`} value={formatCurrency(resultadoGlobal)} icon={<History size={20} />} highlight="emerald" />
       </div>
 
-      <div className="luxury-card overflow-hidden">
-        <table className="w-full text-left border-collapse">
-          <thead>
-            <tr className="bg-[#050505] text-[10px] font-black uppercase text-slate-500 tracking-[0.2em] border-b border-[#262626]">
-              <th className="px-10 py-6">Demonstrativo de Resultado Gerencial</th>
-              <th className="px-10 py-6 text-right">Valor Período</th>
-              {temporalView === 'comparativo' && <th className="px-10 py-6 text-center">Auditoria ∆</th>}
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-white/5 font-bold">
-            <tr className="bg-[#D4AF37]/5"><td colSpan={3} className="px-10 py-4 text-[10px] font-black text-[#D4AF37] uppercase tracking-[0.4em]">I. OPERACIONAL</td></tr>
-            {OPERATIONAL_GROUPS.map(group => (
-              <AuditRow key={group} groupName={group} groupData={currentDRE.groups[group]} prevData={prevDRE?.groups[group]} isComparativo={temporalView === 'comparativo'} formatCurrency={formatCurrency} />
-            ))}
-            <tr className="bg-black/40 border-y border-[#D4AF37]/30">
-              <td className="px-10 py-8 text-sm font-bold text-white uppercase tracking-[0.2em] font-serif-luxury">(=) MARGEM OPERACIONAL LÍQUIDA</td>
-              <td className={`px-10 py-8 text-right text-xl font-bold font-serif-luxury ${currentDRE.resOp < 0 ? 'text-red-500' : 'text-[#D4AF37]'}`}>{formatCurrency(currentDRE.resOp)}</td>
-              {temporalView === 'comparativo' && <td className="px-10 py-8 text-center"><VariationBadge current={currentDRE.resOp} prev={prevDRE?.resOp || 0} /></td>}
-            </tr>
+      <div className="luxury-card overflow-hidden shadow-2xl border border-[#262626]">
+        <div className="bg-[#0A0A0A] px-10 py-6 border-b border-[#262626] flex justify-between items-center">
+          <h2 className="text-[12px] font-black uppercase tracking-[0.3em] text-[#D4AF37] font-serif-luxury flex items-center gap-3">
+            <BarChart3 size={16} /> DRE GERENCIAL PATRIMONIAL • {selectedYear}
+          </h2>
+          <div className="flex items-center gap-2 text-[8px] font-black text-slate-600 uppercase tracking-widest">
+            <Calendar size={12} /> Ref: {temporalView.toUpperCase()}
+          </div>
+        </div>
 
-            <tr className="bg-blue-500/5"><td colSpan={3} className="px-10 py-4 text-[10px] font-black text-blue-400 uppercase tracking-[0.4em]">II. ESTRATÉGICO / WEALTH</td></tr>
-            {WEALTH_GROUPS.map(group => (
-              <AuditRow key={group} groupName={group} groupData={currentDRE.groups[group]} prevData={prevDRE?.groups[group]} isComparativo={temporalView === 'comparativo'} formatCurrency={formatCurrency} />
-            ))}
+        <div className="overflow-x-auto custom-scrollbar">
+          <table className="w-full text-left border-collapse">
+            <thead>
+              <tr className="bg-[#050505] text-[10px] font-black uppercase text-slate-500 tracking-[0.2em] border-b border-[#262626]">
+                <th className="px-10 py-5 min-w-[300px]">Hierarquia do Plano de Contas</th>
+                {temporalView === 'comparativo' ? (
+                  periods.map(m => <th key={m} className="px-4 py-5 text-right w-24">{monthsLabels[m]}</th>)
+                ) : (
+                  <th className="px-10 py-5 text-right w-[250px]">Valor (R$)</th>
+                )}
+              </tr>
+            </thead>
+            <tbody>
+              
+              {/* --- NÍVEL I: RESULTADO OPERACIONAL --- */}
+              <tr className="bg-[#D4AF37]/5 border-y border-[#D4AF37]/10">
+                <td colSpan={temporalView === 'comparativo' ? 13 : 2} className="px-10 py-4 text-[12px] font-black text-[#D4AF37] uppercase tracking-[0.5em] font-serif-luxury">I. RESULTADO OPERACIONAL</td>
+              </tr>
 
-            <tr className="bg-white/[0.03] border-t-2 border-white/10">
-              <td className="px-10 py-10 text-base font-black text-white uppercase tracking-[0.4em] font-serif-luxury">(=) RESULTADO LÍQUIDO CONSOLIDADO</td>
-              <td className={`px-10 py-10 text-right text-2xl font-black font-serif-luxury ${currentDRE.totalGlobal < 0 ? 'text-red-500' : 'text-white'}`}>{formatCurrency(currentDRE.totalGlobal)}</td>
-              {temporalView === 'comparativo' && <td className="px-10 py-10 text-center"><VariationBadge current={currentDRE.totalGlobal} prev={prevDRE?.totalGlobal || 0} /></td>}
-            </tr>
-          </tbody>
-        </table>
+              <RenderSubGroup label="RECEITAS OPERACIONAIS" groupName="RECEITAS OPERACIONAIS" signal="(+)" />
+              <RenderSubGroup label="CUSTO DE VIDA – SOBREVIVÊNCIA" groupName="CUSTO DE VIDA – SOBREVIVÊNCIA" signal="(-)" />
+              <RenderSubGroup label="CUSTO DE VIDA – CONFORTO" groupName="CUSTO DE VIDA – CONFORTO" signal="(-)" />
+
+              <RenderTotalLine label="(=) LUCRO BRUTO DE VIDA" value={lucroBrutoVida} />
+
+              <RenderSubGroup label="DESPESAS PROFISSIONAIS" groupName="DESPESAS PROFISSIONAIS" signal="(-)" />
+              <RenderSubGroup label="BENS MATERIAIS" groupName="BENS MATERIAIS" signal="(-)" />
+              <RenderSubGroup label="LASER" groupName="LASER" signal="(-)" />
+              <RenderSubGroup label="CARROS" groupName="CARROS" signal="(-)" />
+
+              <RenderTotalLine label="(=) LUCRO LÍQUIDO OPERACIONAL" value={lucroLiquidoOp} />
+
+              {/* --- NÍVEL II: MOVIMENTAÇÕES DE PATRIMÔNIO --- */}
+              <tr className="bg-blue-500/5 border-y border-blue-500/10">
+                <td colSpan={temporalView === 'comparativo' ? 13 : 2} className="px-10 py-4 text-[12px] font-black text-blue-400 uppercase tracking-[0.5em] font-serif-luxury">II. MOVIMENTAÇÕES DE PATRIMÔNIO</td>
+              </tr>
+
+              <RenderSubGroup label="INVESTIMENTOS" groupName="INVESTIMENTOS" signal="(-)" />
+
+              <RenderTotalLine label="(=) RESULTADO DO PERÍODO" value={resultadoPeriodo} colorClass="text-blue-400" />
+
+              {/* --- NÍVEL III: RESULTADOS NÃO OPERACIONAIS / FINANCEIROS --- */}
+              <tr className="bg-emerald-500/5 border-y border-emerald-500/10">
+                <td colSpan={temporalView === 'comparativo' ? 13 : 2} className="px-10 py-4 text-[12px] font-black text-emerald-400 uppercase tracking-[0.5em] font-serif-luxury">III. RESULTADOS NÃO OPERACIONAIS / FINANCEIROS</td>
+              </tr>
+
+              <RenderSubGroup label="RECEITAS NÃO OPERACIONAIS" groupName="RECEITAS NÃO OPERACIONAIS" signal="(+)" />
+              <RenderSubGroup label="RECEITAS FINANCEIRAS" groupName="RECEITAS FINANCEIRAS" signal="(+)" />
+
+              <tr className="bg-[#181818] border-t-4 border-white/10">
+                <td className="px-10 py-10 text-[13px] font-black text-white uppercase tracking-[0.4em] font-serif-luxury">(=) RESULTADO GLOBAL DO PERÍODO</td>
+                <td className={`px-10 py-10 text-right text-3xl font-black font-serif-luxury ${resultadoGlobal < 0 ? 'text-red-500' : 'text-white'}`}>{formatCurrency(resultadoGlobal)}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
-  );
-};
-
-const AuditRow = ({ groupName, groupData, prevData, isComparativo, formatCurrency }: any) => {
-  const [isGroupExpanded, setIsGroupExpanded] = useState(false);
-  const [expandedCats, setExpandedCats] = useState<Set<string>>(new Set());
-
-  const toggleCat = (catName: string) => {
-    const newSet = new Set(expandedCats);
-    if (newSet.has(catName)) newSet.delete(catName);
-    else newSet.add(catName);
-    setExpandedCats(newSet);
-  };
-
-  return (
-    <>
-      <tr className="group hover:bg-white/[0.02] cursor-pointer transition-colors" onClick={() => setIsGroupExpanded(!isGroupExpanded)}>
-        <td className="px-10 py-5 flex items-center gap-3">
-          <ChevronDown size={14} className={`text-slate-600 transition-transform ${isGroupExpanded ? '' : '-rotate-90'}`} />
-          <span className="text-[11px] font-bold text-slate-300 uppercase tracking-widest">{groupName}</span>
-        </td>
-        <td className={`px-10 py-5 text-right font-bold text-xs ${groupData.total < 0 ? 'text-red-400' : 'text-white'}`}>{formatCurrency(groupData.total)}</td>
-        {isComparativo && <td className="px-10 py-5 text-center"><VariationBadge current={groupData.total} prev={prevData?.total || 0} /></td>}
-      </tr>
-
-      {isGroupExpanded && Object.entries(groupData.categories as Record<string, CategoryDetail>).map(([catName, catDetail]) => (
-        <React.Fragment key={catName}>
-          <tr className="bg-black/20 hover:bg-black/40 cursor-pointer" onClick={() => toggleCat(catName)}>
-            <td className="px-20 py-4 flex items-center gap-2">
-               <ChevronDown size={12} className={`text-[#D4AF37] transition-transform ${expandedCats.has(catName) ? '' : '-rotate-90'}`} />
-               <span className="text-[10px] font-black text-[#D4AF37]/80 uppercase tracking-widest">{catName}</span>
-            </td>
-            <td className="px-10 py-4 text-right text-[10px] text-slate-400 font-bold">{formatCurrency(catDetail.total)}</td>
-            {isComparativo && <td></td>}
-          </tr>
-          {expandedCats.has(catName) && catDetail.txs.map((tx: AuditDetail) => (
-            <tr key={tx.id} className="bg-black/40 animate-in slide-in-from-left-2">
-              <td className="px-28 py-3 flex flex-col">
-                <span className="text-[9px] font-black text-slate-500 uppercase">{new Date(tx.data).toLocaleDateString('pt-BR')}</span>
-                <span className="text-[10px] text-slate-300 uppercase">{tx.descricao}</span>
-              </td>
-              <td className="px-10 py-3 text-right">
-                <span className={`text-[10px] font-bold ${tx.valor < 0 ? 'text-red-500/70' : 'text-emerald-500/70'}`}>{formatCurrency(tx.valor)}</span>
-              </td>
-              {isComparativo && <td></td>}
-            </tr>
-          ))}
-        </React.Fragment>
-      ))}
-    </>
   );
 };
 
@@ -336,24 +299,12 @@ const KPIBox = ({ title, value, icon, highlight }: any) => {
     return 'border-[#262626] text-slate-400';
   };
   return (
-    <div className={`luxury-card p-10 border-l-4 ${getColors()} bg-gradient-to-br from-[#1A1A1A] to-[#0A0A0A]`}>
-      <div className="flex justify-between items-start">
-        <p className="label-text mb-3">{title}</p>
+    <div className={`luxury-card p-8 border-l-4 ${getColors()} bg-gradient-to-br from-[#1A1A1A] to-[#0A0A0A] hover:bg-white/[0.02] transition-all`}>
+      <div className="flex justify-between items-start mb-6">
+        <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">{title}</p>
         <div className="opacity-40">{icon}</div>
       </div>
-      <h3 className="text-3xl font-bold font-serif-luxury text-white">{value}</h3>
-    </div>
-  );
-};
-
-const VariationBadge = ({ current, prev }: { current: number; prev: number }) => {
-  if (prev === 0) return <span className="text-[9px] font-black text-slate-700">--</span>;
-  const variation = ((current - prev) / Math.abs(prev)) * 100;
-  const isPositive = variation >= 0;
-  return (
-    <div className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[9px] font-black ${isPositive ? 'text-emerald-500 bg-emerald-500/10' : 'text-red-500 bg-red-500/10'}`}>
-      {isPositive ? <ArrowUpRight size={10} /> : <ArrowDownRight size={10} />}
-      {Math.abs(variation).toFixed(1)}%
+      <h3 className="text-2xl font-bold font-serif-luxury text-white">{value}</h3>
     </div>
   );
 };

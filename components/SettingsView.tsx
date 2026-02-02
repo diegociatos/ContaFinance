@@ -42,7 +42,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({
   const [newBank, setNewBank] = useState({ nome: '', tipo: 'Banco' as any, entidadeId: '', saldoInicial: 0 });
   const [newCat, setNewCat] = useState({ 
     nome: '', 
-    grupo: DRE_GROUPS[0] // Inicia no primeiro grupo (RECEITAS OPERACIONAIS)
+    grupo: DRE_GROUPS[0] 
   });
   const [newParam, setNewParam] = useState({ type: 'class' as 'class' | 'indexer' | 'custodian', nome: '', entidadeId: '' });
 
@@ -59,9 +59,8 @@ const SettingsView: React.FC<SettingsViewProps> = ({
     const nomeLimpo = newCat.nome.trim();
     if (!nomeLimpo) return;
 
-    // Lógica inteligente de tipo baseada no grupo
     let tipo: 'receita' | 'despesa' | 'transferencia' = 'despesa';
-    if (newCat.grupo === 'RECEITAS OPERACIONAIS' || newCat.grupo === 'RECEITAS FINANCEIRAS / VARIAÇÃO') {
+    if (newCat.grupo === 'RECEITAS OPERACIONAIS' || newCat.grupo === 'RECEITAS FINANCEIRAS') {
       tipo = 'receita';
     } else if (newCat.grupo === 'TRANSFERÊNCIAS INTERNAS') {
       tipo = 'transferencia';
@@ -75,14 +74,10 @@ const SettingsView: React.FC<SettingsViewProps> = ({
       isOperating: true
     };
 
-    // Atualiza o estado global (persistência automática via App.tsx)
     setCategories(prev => [...prev, novaCategoria]);
-    
-    // Limpa o formulário
     setNewCat({ ...newCat, nome: '' });
   };
 
-  // Mapeamento de Colunas P&L
   const categoriesColumns = [
     { 
       title: 'Receitas Operacionais', 
@@ -90,21 +85,20 @@ const SettingsView: React.FC<SettingsViewProps> = ({
     },
     { 
       title: 'Custos de Vida', 
-      groups: ['CUSTO DE VIDA SOBREVIVÊNCIA', 'CUSTO DE VIDA CONFORTO'] 
+      groups: ['CUSTO DE VIDA – SOBREVIVÊNCIA', 'CUSTO DE VIDA – CONFORTO'] 
     },
     { 
       title: 'Despesas Profissionais', 
-      groups: ['DESPESAS PROFISSIONAIS'] 
+      groups: ['DESPESAS PROFISSIONAIS', 'BENS MATERIAIS', 'LASER', 'CARROS'] 
     },
     { 
       title: 'Não Operacionais / Wealth', 
-      groups: ['MOVIMENTAÇÕES NÃO OPERACIONAIS', 'RECEITAS FINANCEIRAS / VARIAÇÃO', 'INVESTIMENTOS REALIZADOS', 'TRANSFERÊNCIAS INTERNAS'] 
+      groups: ['RECEITAS NÃO OPERACIONAIS', 'RECEITAS FINANCEIRAS', 'INVESTIMENTOS', 'TRANSFERÊNCIAS INTERNAS'] 
     }
   ];
 
   return (
     <div className="space-y-10 animate-in fade-in duration-700 font-sans">
-      {/* Navigation Tabs */}
       <div className="flex flex-wrap gap-2 bg-[#111111] p-1.5 rounded-2xl border border-[#262626] w-fit shadow-2xl">
         <TabBtn active={activeTab === 'entities'} onClick={() => setActiveTab('entities')} label="Entidades & Holdings" icon={<Building2 size={16} />} />
         <TabBtn active={activeTab === 'banks'} onClick={() => setActiveTab('banks')} label="Bancos & Contas" icon={<Landmark size={16} />} />
@@ -114,7 +108,6 @@ const SettingsView: React.FC<SettingsViewProps> = ({
 
       <div className="luxury-card p-12 min-h-[600px] border-[#D4AF37]/20 bg-gradient-to-b from-[#1A1A1A] to-[#0A0A0A]">
         
-        {/* TAB: DICIONÁRIO P&L (MATRIZ DE CONTROLADORIA) */}
         {activeTab === 'categories' && (
           <div className="space-y-16">
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-8 border-b border-[#262626] pb-10">
@@ -123,7 +116,6 @@ const SettingsView: React.FC<SettingsViewProps> = ({
                 <p className="label-text mt-3">Mapeamento dinâmico do plano de contas da DRE</p>
               </div>
 
-              {/* Formulário Compacto Horizontal Corrigido */}
               <div className="flex flex-wrap items-center gap-3 bg-black/40 p-2 rounded-xl border border-[#262626]">
                 <input 
                   type="text" 
@@ -154,7 +146,6 @@ const SettingsView: React.FC<SettingsViewProps> = ({
               </div>
             </div>
 
-            {/* Grid de 4 Colunas Profissional */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-10">
               {categoriesColumns.map((col, idx) => (
                 <div key={idx} className="space-y-8">
@@ -195,7 +186,6 @@ const SettingsView: React.FC<SettingsViewProps> = ({
           </div>
         )}
 
-        {/* TAB: ENTIDADES */}
         {activeTab === 'entities' && (
           <div className="space-y-12">
             <div className="border-b border-[#262626] pb-8">
@@ -248,7 +238,6 @@ const SettingsView: React.FC<SettingsViewProps> = ({
           </div>
         )}
 
-        {/* TAB: BANCOS & CONTAS */}
         {activeTab === 'banks' && (
           <div className="space-y-12">
             <div className="border-b border-[#262626] pb-8">
@@ -303,7 +292,6 @@ const SettingsView: React.FC<SettingsViewProps> = ({
           </div>
         )}
 
-        {/* TAB: PARÂMETROS DE INVESTIMENTO */}
         {activeTab === 'params' && (
           <div className="space-y-12">
             <div className="border-b border-[#262626] pb-8">

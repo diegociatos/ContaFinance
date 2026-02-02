@@ -204,7 +204,8 @@ const App: React.FC = () => {
                     />
                   );
                 case 'dre':
-                  return <DREView state={appState} transactions={transactions.filter(t => globalEntityFilter === 'all' || t.entidadeId === globalEntityFilter)} categories={categories} snapshots={assetSnapshots} selectedMonth={selectedMonth} selectedYear={selectedYear} isConfidential={isConfidential} />;
+                  // Removed snapshots={assetSnapshots} as it's not defined in DREViewProps and is redundant since it exists in AppState
+                  return <DREView state={appState} transactions={transactions.filter(t => globalEntityFilter === 'all' || t.entidadeId === globalEntityFilter)} categories={categories} selectedMonth={selectedMonth} selectedYear={selectedYear} isConfidential={isConfidential} />;
                 case 'patrimonio':
                   return (
                     <PatrimonioView 
@@ -228,6 +229,9 @@ const App: React.FC = () => {
                     onImportAssets={setAssets} 
                     onImportSnapshots={setAssetSnapshots} 
                     onAddInstitution={i => setInstituicoes(p => [...p, i])} 
+                    onAddEntity={e => setEntities(p => [...p, e])}
+                    onUpdateAssetClasses={setAssetClasses}
+                    onUpdateIndexers={setIndexers}
                     onSaveTemplate={t => setMappingTemplates(p => [...p, t])} 
                   />;
                 case 'configuracoes':

@@ -19,12 +19,15 @@ export interface Institution {
 
 export const DRE_GROUPS = [
   'RECEITAS OPERACIONAIS',
-  'CUSTO DE VIDA SOBREVIVÊNCIA',
-  'CUSTO DE VIDA CONFORTO',
+  'CUSTO DE VIDA – SOBREVIVÊNCIA',
+  'CUSTO DE VIDA – CONFORTO',
   'DESPESAS PROFISSIONAIS',
-  'MOVIMENTAÇÕES NÃO OPERACIONAIS',
-  'RECEITAS FINANCEIRAS / VARIAÇÃO',
-  'INVESTIMENTOS REALIZADOS',
+  'BENS MATERIAIS',
+  'LASER',
+  'CARROS',
+  'INVESTIMENTOS',
+  'RECEITAS NÃO OPERACIONAIS',
+  'RECEITAS FINANCEIRAS',
   'TRANSFERÊNCIAS INTERNAS'
 ] as const;
 
@@ -34,6 +37,8 @@ export interface Category {
   tipo: 'receita' | 'despesa' | 'transferencia';
   grupo: (typeof DRE_GROUPS)[number];
   isOperating: boolean;
+  ordem?: number;
+  ativo?: boolean;
 }
 
 export interface CategoryMapping {
